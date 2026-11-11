@@ -84,6 +84,17 @@ export async function handleAccountApi(
     return
   }
   const path = new URL(request.url ?? '/account/api', `http://${request.headers.host ?? 'localhost'}`).pathname
+  if (request.method === 'POST') {
+    const source = request.headers.origin ?? request.headers.referer
+    if (typeof source === 'string') {
+      let sameOrigin = false
+      try { sameOrigin = new URL(source).host === request.headers.host } catch { sameOrigin = false }
+      if (!sameOrigin) {
+        json(response, 403, { error: 'forbidden' })
+        return
+      }
+    }
+  }
   if (request.method === 'GET' && path === '/account/api/me') {
     json(response, 200, meValue(account.user, await store.findTenantById(account.user.tenantId)))
     return

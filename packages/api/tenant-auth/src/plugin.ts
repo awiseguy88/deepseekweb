@@ -39,6 +39,17 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 }
 
 /**
+ * Fatal hosted startup: a broken migration or authorization plane must fail
+ * readiness instead of serving a half-initialized tenant surface.
+ * @param stage - startup stage that failed.
+ * @param error - the failure.
+ */
+function failStartup(stage: string, error: unknown): void {
+  console.error(`[wiseai-tenant-auth] ${stage} failed:`, error)
+  if (process.env.WISEAI_AUTH_REQUIRED === '1') process.exit(1)
+}
+
+/**
  * Delete customer tenants that exist only for deployment verification (every
  * account on the `@wiseai.example` test domain), so the hosted admin dashboard
  * reports real accounts instead of probe data.
@@ -69,7 +80,8 @@ export function apply(ctx: Context, config: Config): void {
   // The schema set is idempotent, so every boot converges an existing database
   // and a fresh Railway database to the current columns and tables.
   const migration = database.migrate().catch((error: unknown) => {
-    console.error('[wiseai-tenant-auth] schema migration failed:', error)
+    failStartup('schema migration', error)
+    throw error
   })
   // Probe tenants from deployment verification hold no customer data; drop
   // them after the schema settles so dashboards count real accounts.
@@ -89,7 +101,7 @@ export function apply(ctx: Context, config: Config): void {
   const access = createTenantAccess({ ctx, store })
   ctx.inject(['typert', 'remoteAccess'], () => {
     void migration.then(() => access.start()).catch((error: unknown) => {
-      console.error('[wiseai-tenant-auth] tenant access policy failed:', error)
+      failStartup('tenant access policy', error)
     })
   })
   ctx.effect(() => () => access.dispose(), 'wiseai-tenant-auth: tenant access')

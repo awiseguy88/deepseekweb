@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { hashPassword, verifyPassword } from './password.ts'
 import { issueSession, logoutSession, resolveSession } from './session-tokens.ts'
+import { isSameOriginMutation } from './origin.ts'
 import type { TenantAuthStore } from './types.ts'
 
 /** Host callback used to bind a validated session to its isolated Peer. */
@@ -11,6 +12,20 @@ export interface TenantSessionRegistrar {
 
 const COOKIE = 'wiseai_session'
 const SESSION_DAYS = 14
+
+/**
+ * Whether session cookies must carry Secure. Railway (and any TLS-terminating
+ * proxy) reaches the process over plain HTTP, so the request URL scheme is not
+ * authoritative. Deployment configuration decides instead: an explicit
+ * WISEAI_SECURE_COOKIES value wins, otherwise an HTTPS public URL implies TLS.
+ * @returns true when the session cookie must be Secure-only.
+ */
+function secureCookie(): boolean {
+  const configured = process.env.WISEAI_SECURE_COOKIES?.trim()
+  if (configured === '0') return false
+  if (configured === '1') return true
+  return (process.env.DSH_WEB_PUBLIC_URL ?? '').trim().toLowerCase().startsWith('https://')
+}
 
 function cookieValue(request: Request): string | undefined {
   const value = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))
@@ -61,6 +76,7 @@ export async function handleNodeAuthRequest(
 }
 
 async function handle(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar): Promise<Response> {
+  if (!isSameOriginMutation(request)) return json({ error: 'forbidden' }, { status: 403 })
   const path = new URL(request.url).pathname
   if (path === '/auth/login' && request.method === 'POST') {
     const body = await request.json().catch(() => null) as { email?: unknown; password?: unknown } | null
@@ -96,7 +112,7 @@ async function handle(store: TenantAuthStore, request: Request, registrar?: Tena
     } catch (error) {
       console.error('[wiseai-tenant-auth] last-seen update failed:', error)
     }
-    const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : ''
+    const secure = secureCookie() ? '; Secure' : ''
     return json({ user: { userId: user.userId, email: user.email, role: user.role, tenantId: user.tenantId } }, {
       headers: { 'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${SESSION_DAYS * 86_400}` },
     })

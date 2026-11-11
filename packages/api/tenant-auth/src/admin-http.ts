@@ -12,6 +12,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { hashPassword } from './password.ts'
 import { resolveSession } from './session-tokens.ts'
+import { isSameOriginMutation } from './origin.ts'
 import type {
   SupportRequestPatch,
   SupportRequestRecord,
@@ -517,6 +518,7 @@ async function whoAmI(store: TenantAuthStore, user: TenantUserRecord): Promise<R
  * administrator's tenant, 404 for an unknown route.
  */
 export async function adminApiResponse(store: TenantAuthStore, request: Request): Promise<Response> {
+  if (!isSameOriginMutation(request)) return forbidden()
   const principal = await authenticate(store, request)
   if (principal === null) return json({ error: 'unauthenticated' }, 401)
   if (!isAdminAccount(principal.user)) return forbidden()
@@ -571,19 +573,6 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
     return updateSupportRequest(store, tenantScope, decodeURIComponent(rest[0]), request)
   }
   if (resource === 'sales' && rest.length === 0 && method === 'GET') return sales(store, tenantScope)
-  if (resource === 'cleanup' && rest.length === 0 && method === 'POST') {
-    if (tenantScope !== undefined) return forbidden()
-    const tenants = await store.listTenants()
-    let deleted = 0
-    for (const tenant of tenants) {
-      if (tenant.tenantId === principal.user.tenantId) continue
-      const accounts = await store.listAccounts(tenant.tenantId)
-      if (accounts.some(account => account.platformAdmin)) continue
-      if (await store.deleteTenant(tenant.tenantId)) deleted += 1
-    }
-    const revoked = await store.revokeSessions({})
-    return json({ ok: true, deleted, revoked })
-  }
   return notFound()
 }
 
@@ -596,6 +585,7 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
 export async function supportApiResponse(store: TenantAuthStore, request: Request): Promise<Response> {
   const url = new URL(request.url, 'http://localhost')
   if (url.pathname !== '/support/requests' || request.method !== 'POST') return notFound()
+  if (!isSameOriginMutation(request)) return forbidden()
   const principal = await authenticate(store, request)
   if (principal === null) return json({ error: 'unauthenticated' }, 401)
   const body = await readBody(request)

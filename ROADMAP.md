@@ -1,0 +1,46 @@
+# WiseAI platform roadmap
+
+Status legend: `[x]` shipped and verified in the hosted deployment; `[ ]` not shipped; each open item names its acceptance check. This file is the single owner of the commercial-readiness backlog; update it in the same pull request as each change.
+
+Scope note: the admin command-center mockups in the audit are **design references only** — no mock metrics are served to operators. Operators see real database values.
+
+## Shipped
+
+- [x] **Removed the destructive "Remove test data" admin action.** `POST /admin/api/cleanup` (which deleted every non-operator tenant) and its UI button are gone. Test fixtures are now identified only by the explicit `@wiseai.example` domain and are deleted by a targeted boot job; that job never touches a tenant containing any other address.
+- [x] **Session cookies are Secure from deployment configuration, not the proxy connection.** `WISEAI_SECURE_COOKIES=1|0` overrides; otherwise an HTTPS public URL enables Secure.
+- [x] **Startup fails closed.** A failed schema migration or failed tenant access-policy initialization exits the hosted process (`WISEAI_AUTH_REQUIRED=1`) instead of serving a half-initialized authorization plane.
+- [x] **Commercial entitlement enforcement in session admission.** Session lookup and issuance require an entitled tenant: `active`/`trialing`, or `past_due` with an explicit access date inside `WISEAI_ACCESS_GRACE_DAYS` (default `0`). `canceled`/`disabled`/expired tenants are refused.
+- [x] **Same-origin protection for cookie-authenticated mutations.** Admin API, support intake, account API, login, and sign-out reject cross-site `Origin`/`Referer` authorities.
+- [x] **Dead login sessions purge.** Revoked session rows are deleted on boot and by an admin button (`POST /admin/api/sessions/purge-revoked`), replacing unbounded audit-free revocation residue.
+- [x] **One live login session per account**, so the "active sessions" metric tracks accounts rather than accumulated sign-ins.
+- [x] **Tenant isolation for sessions and workspaces** through the remote-access policy plus first-wins ownership claims (visibility isolation).
+- [x] **Hosted domain and branding fixes.** `RAILWAY_PUBLIC_DOMAIN` is trusted and advertised, the whale marks were replaced with the W mark, and session resume recovers a vanished container workspace into `/data/workspace`.
+- [x] **Hosted capacity controls.** Concurrent subagents raised to 32 (override `WISEAI_MAX_ACTIVE_SUBAGENTS`); tenant customer delete and session revoke/purge remain platform/tenant-admin scoped.
+
+## Critical — before accepting paying customers
+
+- [ ] **C1. Explicit tenant capability allowlist.** Replace "every discovered remote action is granted to global, session, and workspace roles" with named capabilities (`files`, `terminal`, `browser`, `plugins`, `computer-control`, `agent.create`, `schedule.manage`, ...). Deny unknown endpoints by default; new backend plugins must not expand tenant permissions implicitly. Acceptance: a fixture endpoint not on the allowlist is denied through the executor; capability changes are configuration; tests cover each role/resource combination.
+- [ ] **C2. Filesystem and execution isolation.** Every agent execution (including subagents and background jobs) must run with its tenant's enforced root and a sandbox that restricts reads as well as writes; `/data/workspace` is a temporary shared fallback, not a tenancy boundary. Acceptance: two-tenant end-to-end test proves tenant A cannot read tenant B files through any tool, shell, browser, or PTC path; sandbox mode and path policy are explicit per deployment.
+- [ ] **C3. Safe destructive admin operations.** Remove hard customer deletion; replace with soft delete, impact preview/dry run, reauthentication, typed confirmation, approval, and restorable deletion window. Acceptance: preview lists exact affected rows; no mutation executes without fresh reauth plus confirmation; every step emits an audit event.
+- [ ] **C4. Transactional Stripe webhook inbox.** Insert the verified event before applying state in one transaction, dedupe by event id, order lifecycle transitions, retry with dead-letter handling, and reconcile subscriptions directly against Stripe. Acceptance: replaying old/duplicate/delayed events cannot regress subscription state; tests cover ordering and forced failures.
+
+## High — required before scaling
+
+- [ ] **H1. Transactional ownership claims.** Current claims populate memory before the asynchronous Postgres write. Move to acknowledged persistence (claim plus session/workspace creation transaction, or an outbox with retry) and define the failure policy so a failed write never leaves unowned or inconsistently owned resources after restart. Acceptance: injected database failure fails the create path deterministically and a restart restores exactly the persisted owners.
+- [ ] **H2. Immutable audit history.** Append-only `audit_events` for admin actions, permission/capability changes, billing changes, impersonation, and agent approvals, with actor, tenant, before/after, request id, and timestamp. Acceptance: every mutating admin route emits exactly one audit record; records cannot be updated or deleted through the API.
+- [ ] **H3. Authentication abuse hardening.** Login and signup throttling, IP and account anti-abuse controls, verified email change, password recovery by verified email, and credential/token rotation. Acceptance: rate limits are configurable and tested; recovery and email verification require proof of mailbox control.
+- [ ] **H4. Immediate suspension revocation.** Suspending a customer must revoke login tokens and stop running agents, subagents, scheduled jobs, and worker leases, not merely block new sessions. Acceptance: a suspension test observes running work stopped and cannot be resumed with an existing cookie.
+- [ ] **H5. Entitlement and metering model.** `tenant_entitlements` (plan capabilities, concurrency, budgets, allowed tools/models), `agent_runs`, `usage_events`, `approval_requests`, `worker_leases`, plus enforcement before agent execution and for long-running jobs. Acceptance: exceeding a concurrency, budget, or tool entitlement is refused with a structured error; usage is idempotent per run.
+- [ ] **H6. Operations command center.** Overview, Customers, Agent Fleet, Runs & Jobs, Usage & Costs, Billing, Security & Audit, Infrastructure; each tenant admin sees an isolated organization view. Customer 360 exposes plan, usage, running agents, costs, incidents, support, and resource allocation that takes effect in the execution system. Acceptance: every widget reads a real table or event stream; no mock numbers in production; allocation changes are audited and observed by the runtime.
+- [ ] **H7. Metering/control-plane schema and event ingestion.** Add the billing/metering tables above with an append-only usage pipeline (provider, model, tokens, compute ms, cost, idempotency key), worker lease heartbeats, and recovery of expired leases. Acceptance: a multi-step run with subagents produces one traceable run tree with usage rows and recoverable leases.
+- [ ] **H8. Customer workspace and landing page UX.** Navigation (Home, Tasks, Agents, Projects, Automations, Integrations, Usage, Settings), three-panel task view with live activity/permissions/cost, visual patch-preview-approve-rollback editing, real sandboxed landing demo or recorded genuine execution, onboarding and early-access funnel, evidence-based capability claims, and branding audit (for example `apps/web/index.html` mobile title). Acceptance: usability review and browser smoke tests for each route; landing demo either executes sandboxed work or is labeled as scripted.
+- [ ] **H9. Real billing portal.** Replace `/account` → `/admin` "View invoices" with a Stripe customer portal session; keep support separate. Acceptance: customer can open the portal, see invoices/payment methods, and return to the account page.
+- [ ] **H10. Pricing, margin, and product analytics.** Subscription tiers for features/concurrency plus compute allowances with explicit overage consent and hard budget stops; track MRR, expansion/churn/refunds, true cost per run, activation, retention, reliability, and gross profit per active customer. Acceptance: one dashboard query answers "gross profit per active customer" and "first-session meaningful task completion" from stored events.
+
+## Delivery phases
+
+1. **P0 (blocks revenue):** C1, C2, C3, C4, H1, H2.
+2. **P1 (scaling and trust):** H3, H4, H5, H7, H9.
+3. **P2 (operator and customer experience):** H6, H8, H10.
+
+Each phase ends with: security review, two-tenant end-to-end isolation test, audit coverage check, and an operator runbook update.

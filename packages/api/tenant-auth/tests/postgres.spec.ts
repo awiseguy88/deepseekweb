@@ -237,6 +237,8 @@ describe('signup and session persistence', () => {
       revokedAt: null,
     })
     expect(db.calls[0]?.sql).toContain('NOT u.disabled AND NOT t.disabled')
+    expect(db.calls[0]?.sql).toContain("t.status IN ('active', 'trialing')")
+    expect(db.calls[0]?.parameters).toEqual(['session-1', 0])
 
     const emptyDb = new ScriptedDatabase().next([])
     expect(await storeWith(emptyDb).findSession('revoked')).toBeNull()
@@ -246,7 +248,7 @@ describe('signup and session persistence', () => {
     const input = { sessionId: 'session-2', userId: 'user-1', tenantId: 'tenant-1', expiresAt: new Date('2026-02-20T10:00:00.000Z') }
     const db = new ScriptedDatabase().next([{ session_id: 'session-2' }])
     expect(await storeWith(db).createSession(input)).toEqual({ ...input, revokedAt: null })
-    expect(db.calls[0]?.parameters).toEqual(['session-2', 'user-1', 'tenant-1', input.expiresAt])
+    expect(db.calls[0]?.parameters).toEqual(['session-2', 'user-1', 'tenant-1', input.expiresAt, 0])
 
     const refused = new ScriptedDatabase().next([])
     await expect(storeWith(refused).createSession(input)).rejects.toThrow('Session admission refused')

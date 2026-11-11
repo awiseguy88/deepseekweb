@@ -63,5 +63,10 @@ if [ -z "$bind_host" ]; then
   exit 69
 fi
 
+# The hosted listener is reached only through Railway's TLS proxy, so browser
+# session cookies are Secure unless the operator explicitly disables that.
+: "${WISEAI_SECURE_COOKIES:=1}"
+export WISEAI_SECURE_COOKIES
+
 # shellcheck disable=SC2086
 exec pnpm start:web -- --no-open --host "$bind_host" --port "$PORT" --public-url "$public_url" $trusted_args

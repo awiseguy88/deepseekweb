@@ -24,6 +24,12 @@ export interface TenantAuthDatabase {
   query<T extends Record<string, unknown>>(sql: string, parameters: readonly unknown[]): Promise<{ readonly rows: readonly T[] }>
 }
 
+/** Whole days of explicit entitlement grace after access_until; zero means none. */
+function accessGraceDays(): number {
+  const value = Number(process.env.WISEAI_ACCESS_GRACE_DAYS ?? '0')
+  return Number.isSafeInteger(value) && value >= 0 && value <= 365 ? value : 0
+}
+
 const USER_COLUMNS = 'user_id, email, password_hash, role, tenant_id, disabled, platform_admin, last_seen_at, created_at'
 const TENANT_COLUMNS = 'tenant_id, name, plan, status, disabled, stripe_customer_id, stripe_subscription_id, access_until, notes, created_at, updated_at'
 const ACCOUNT_COLUMNS = 'u.user_id, u.tenant_id, t.name AS tenant_name, u.email, u.role, u.platform_admin, u.disabled, u.created_at, u.last_seen_at'
@@ -297,8 +303,13 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
          JOIN wiseai_users AS u ON u.user_id = s.user_id AND u.tenant_id = s.tenant_id
          JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
         WHERE s.session_id = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
-          AND NOT u.disabled AND NOT t.disabled`,
-      [sessionId],
+          AND NOT u.disabled AND NOT t.disabled
+          AND (
+            t.status IN ('active', 'trialing')
+            OR (t.status = 'past_due' AND t.access_until IS NOT NULL)
+          )
+          AND (t.access_until IS NULL OR t.access_until + make_interval(days => $2) > now())`,
+      [sessionId, accessGraceDays()],
     )
     const row = result.rows[0]
     return row === undefined ? null : {
@@ -313,9 +324,14 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
        SELECT $1, u.user_id, u.tenant_id, $4::timestamptz
          FROM wiseai_users AS u JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
         WHERE u.user_id = $2 AND u.tenant_id = $3 AND NOT u.disabled AND NOT t.disabled
+          AND (
+            t.status IN ('active', 'trialing')
+            OR (t.status = 'past_due' AND t.access_until IS NOT NULL)
+          )
+          AND (t.access_until IS NULL OR t.access_until + make_interval(days => $5) > now())
           AND $4::timestamptz > now()
        RETURNING session_id`,
-      [input.sessionId, input.userId, input.tenantId, input.expiresAt],
+      [input.sessionId, input.userId, input.tenantId, input.expiresAt, accessGraceDays()],
     )
     if (result.rows.length !== 1) throw new Error('Session admission refused')
     return { ...input, revokedAt: null }

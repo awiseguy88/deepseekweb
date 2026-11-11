@@ -149,7 +149,6 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     <div class="panel-head">
       <div><h2>Overview</h2><p class="muted">Deployment health at a glance.</p></div>
       <div class="panel-actions">
-        <button type="button" class="btn danger" id="overview-cleanup">Remove test data</button>
         <button type="button" class="btn ghost" id="overview-refresh">Refresh</button>
       </div>
     </div>
@@ -568,7 +567,6 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     $('tab-sales').hidden = true;
     $('panel-sales').hidden = true;
     $('customer-delete').hidden = true;
-    $('overview-cleanup').hidden = true;
     $('tab-users').hidden = false;
     state.customerTenant = me.tenantId;
   }
@@ -1070,17 +1068,6 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     });
   }
 
-  function cleanupTestData() {
-    if (!window.confirm('Delete every customer tenant except the operator workspace and revoke all sign-ins?')) return;
-    api('/admin/api/cleanup', { method: 'POST' }).then(function (payload) {
-      toast('Removed ' + String((payload && payload.deleted) || 0) + ' customers; revoked ' + String((payload && payload.revoked) || 0) + ' sign-ins.', 'ok');
-      loadOverview();
-      loadCustomers();
-    }).catch(function (error) {
-      toast('Cleanup failed: ' + error.message, 'error');
-    });
-  }
-
   function loadSales() {
     beginLoad('panel-sales', 'sales-status');
     api('/admin/api/sales').then(function (payload) {
@@ -1186,7 +1173,6 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     $('sessions-revoke-all').addEventListener('click', revokeAllSessions);
     $('sessions-purge').addEventListener('click', purgeDeadSessions);
     $('customer-delete').addEventListener('click', deleteCustomer);
-    $('overview-cleanup').addEventListener('click', cleanupTestData);
     $('sales-refresh').addEventListener('click', loadSales);
     Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (button) {
       button.addEventListener('click', function () { closeDialog(button.getAttribute('data-close')); });
