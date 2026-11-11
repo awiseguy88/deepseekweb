@@ -270,6 +270,10 @@ class FakeStore implements TenantAuthStore {
   async revokeSessions(): Promise<number> {
     return 0
   }
+
+  async purgeRevokedSessions(): Promise<number> {
+    return 0
+  }
 }
 
 function signedIn(store: FakeStore, overrides: Partial<TenantUserRecord> = {}): FakeStore {

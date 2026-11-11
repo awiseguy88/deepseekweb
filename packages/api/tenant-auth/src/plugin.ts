@@ -74,7 +74,10 @@ export function apply(ctx: Context, config: Config): void {
   // Probe tenants from deployment verification hold no customer data; drop
   // them after the schema settles so dashboards count real accounts.
   ctx.effect(() => {
-    const cleanup = migration.then(() => purgeVerificationTenants(store)).catch((error: unknown) => {
+    const cleanup = migration.then(async () => {
+      await purgeVerificationTenants(store)
+      await store.purgeRevokedSessions()
+    }).catch((error: unknown) => {
       console.error('[wiseai-tenant-auth] verification tenant cleanup failed:', error)
     })
     return () => { void cleanup }

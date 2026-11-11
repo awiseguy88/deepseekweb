@@ -559,6 +559,10 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
     const revoked = await store.revokeSessions(tenantScope === undefined ? {} : { tenantId: tenantScope })
     return json({ ok: true, revoked })
   }
+  if (resource === 'sessions' && rest.length === 1 && rest[0] === 'purge-revoked' && method === 'POST') {
+    const removed = await store.purgeRevokedSessions(tenantScope === undefined ? {} : { tenantId: tenantScope })
+    return json({ ok: true, removed })
+  }
   if (resource === 'sessions' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'revoke' && method === 'POST') {
     return revokeSession(store, tenantScope, decodeURIComponent(rest[0]))
   }

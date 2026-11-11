@@ -246,6 +246,8 @@ export interface TenantAuthStore {
   deleteTenant(tenantId: string): Promise<boolean>
   /** Revoke every live login session, optionally for one tenant or account. */
   revokeSessions(filter?: { readonly tenantId?: string; readonly userId?: string }): Promise<number>
+  /** Delete revoked login-session rows, optionally for one tenant. */
+  purgeRevokedSessions(filter?: { readonly tenantId?: string }): Promise<number>
 
   /*
    * Tenant ownership of Sessions and Workspaces. Optional so an identity-only

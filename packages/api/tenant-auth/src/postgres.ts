@@ -502,6 +502,19 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return result.rows.length
   }
 
+  async purgeRevokedSessions(filter: { readonly tenantId?: string } = {}): Promise<number> {
+    const result = filter.tenantId === undefined
+      ? await this.db.query<{ session_id: string }>(
+        'DELETE FROM wiseai_sessions WHERE revoked_at IS NOT NULL RETURNING session_id',
+        [],
+      )
+      : await this.db.query<{ session_id: string }>(
+        'DELETE FROM wiseai_sessions WHERE revoked_at IS NOT NULL AND tenant_id = $1 RETURNING session_id',
+        [filter.tenantId],
+      )
+    return result.rows.length
+  }
+
   async recordLogin(userId: string): Promise<void> {    const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim().toLowerCase() ?? ''
     await this.db.query(
       `UPDATE wiseai_users

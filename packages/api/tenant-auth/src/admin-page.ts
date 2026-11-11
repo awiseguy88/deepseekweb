@@ -206,6 +206,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
           <button type="submit" class="btn ghost">Filter</button>
         </form>
         <button type="button" class="btn ghost" id="sessions-refresh">Refresh</button>
+        <button type="button" class="btn danger" id="sessions-purge">Remove dead sessions</button>
         <button type="button" class="btn danger" id="sessions-revoke-all">Revoke all</button>
       </div>
     </div>
@@ -1045,6 +1046,17 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     });
   }
 
+  function purgeDeadSessions() {
+    if (!window.confirm('Permanently delete every revoked session row?')) return;
+    api('/admin/api/sessions/purge-revoked', { method: 'POST' }).then(function (payload) {
+      toast('Removed ' + String((payload && payload.removed) || 0) + ' dead sessions.', 'ok');
+      loadSessions();
+      loadOverview();
+    }).catch(function (error) {
+      toast('Could not remove dead sessions: ' + error.message, 'error');
+    });
+  }
+
   function deleteCustomer() {
     var tenantId = state.customerTenant;
     if (!tenantId) return;
@@ -1172,6 +1184,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
       loadSessions();
     });
     $('sessions-revoke-all').addEventListener('click', revokeAllSessions);
+    $('sessions-purge').addEventListener('click', purgeDeadSessions);
     $('customer-delete').addEventListener('click', deleteCustomer);
     $('overview-cleanup').addEventListener('click', cleanupTestData);
     $('sales-refresh').addEventListener('click', loadSales);
