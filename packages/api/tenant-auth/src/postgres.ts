@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  ClaimSessionOwnerInput,
+  ClaimWorkspaceOwnerInput,
   SalesEventInput,
   SalesEventRecord,
   SupportRequestInput,
@@ -11,8 +13,10 @@ import type {
   TenantProfilePatch,
   TenantRecord,
   TenantSessionListRecord,
+  TenantSessionOwnerRecord,
   TenantSessionRecord,
   TenantUserRecord,
+  TenantWorkspaceOwnerRecord,
 } from './types.ts'
 
 /** Minimal query surface, allowing the host to inject its approved Postgres driver. */
@@ -26,6 +30,8 @@ const ACCOUNT_COLUMNS = 'u.user_id, u.tenant_id, t.name AS tenant_name, u.email,
 const SESSION_LIST_COLUMNS = 's.session_id, s.user_id, s.tenant_id, u.email, t.name AS tenant_name, s.expires_at, s.created_at, s.revoked_at'
 const SUPPORT_COLUMNS = 'r.request_id, r.tenant_id, t.name AS tenant_name, r.user_id, r.email, r.subject, r.message, r.page_url, r.status, r.priority, r.admin_note, r.created_at, r.updated_at'
 const SALES_COLUMNS = 'event_id, event_type, tenant_id, customer_id, subscription_id, amount_total, currency, status, created_at'
+const SESSION_OWNER_COLUMNS = 'session_id, tenant_id, user_id'
+const WORKSPACE_OWNER_COLUMNS = 'workspace_id, tenant_id, user_id'
 
 interface UserRow extends Record<string, unknown> {
   user_id: string
@@ -110,6 +116,18 @@ interface SalesRow extends Record<string, unknown> {
   currency: string | null
   status: string | null
   created_at: Date
+}
+
+interface SessionOwnerRow extends Record<string, unknown> {
+  session_id: string
+  tenant_id: string
+  user_id: string
+}
+
+interface WorkspaceOwnerRow extends Record<string, unknown> {
+  workspace_id: string
+  tenant_id: string
+  user_id: string
 }
 
 /** Account emails identify a person across tenants, so they are stored folded. */
@@ -571,5 +589,39 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     }
     const result = await this.db.query<SalesRow>(sql, parameters)
     return result.rows.map(salesRecord)
+  }
+
+  async listSessionOwners(): Promise<readonly TenantSessionOwnerRecord[]> {
+    const result = await this.db.query<SessionOwnerRow>(
+      `SELECT ${SESSION_OWNER_COLUMNS} FROM wiseai_session_owners ORDER BY tenant_id, session_id`,
+      [],
+    )
+    return result.rows.map(row => ({ sessionId: row.session_id, tenantId: row.tenant_id, userId: row.user_id }))
+  }
+
+  async claimSessionOwner(input: ClaimSessionOwnerInput): Promise<void> {
+    await this.db.query(
+      `INSERT INTO wiseai_session_owners (session_id, tenant_id, user_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (session_id) DO NOTHING`,
+      [input.sessionId, input.tenantId, input.userId],
+    )
+  }
+
+  async listWorkspaceOwners(): Promise<readonly TenantWorkspaceOwnerRecord[]> {
+    const result = await this.db.query<WorkspaceOwnerRow>(
+      `SELECT ${WORKSPACE_OWNER_COLUMNS} FROM wiseai_workspace_owners ORDER BY tenant_id, workspace_id`,
+      [],
+    )
+    return result.rows.map(row => ({ workspaceId: row.workspace_id, tenantId: row.tenant_id, userId: row.user_id }))
+  }
+
+  async claimWorkspaceOwner(input: ClaimWorkspaceOwnerInput): Promise<void> {
+    await this.db.query(
+      `INSERT INTO wiseai_workspace_owners (workspace_id, tenant_id, user_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (workspace_id) DO NOTHING`,
+      [input.workspaceId, input.tenantId, input.userId],
+    )
   }
 }

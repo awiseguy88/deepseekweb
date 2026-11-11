@@ -71,6 +71,23 @@ export { ApiSessionNotFound } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
 
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface PrincipalMap {
+    /**
+     * Authenticated hosted tenant caller. The Connection transport that admits
+     * these peers owns the canonical declaration; the Session Controller
+     * restates the fields its creation claims read, so its Host program does
+     * not depend on a Connection build being present.
+     */
+    tenant: {
+      readonly kind: 'tenant'
+      readonly tenantId: string
+      readonly userId: string
+      readonly role: 'admin' | 'member'
+    }
+  }
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host Session business API and Remote namespace owner. */
@@ -304,8 +321,10 @@ export class SessionController extends TypertRemoteService {
    * @returns the created or reused Session identity and its preset when configured.
    */
   @Remote('create')
-  create(request: SessionCreateRequest): Promise<SessionCreateValue> {
-    return this.commands.create(request)
+  async create(request: SessionCreateRequest): Promise<SessionCreateValue> {
+    const value = await this.commands.create(request)
+    this.claimSessionOwnership(value.sessionId)
+    return value
   }
 
   /**
@@ -455,7 +474,23 @@ export class SessionController extends TypertRemoteService {
         })
       }
     }
-    return this.commands.fork(request)
+    const value = await this.commands.fork(request)
+    this.claimSessionOwnership(value.sessionId)
+    return value
+  }
+
+  /**
+   * Record the caller tenant as owner of a Session this call created. The
+   * optional service is absent when the deployment does not partition Sessions.
+   * @param sessionId - the Session returned by the successful create or fork.
+   */
+  private claimSessionOwnership(sessionId: SessionId): void {
+    const principal = principalOf(this.ctx.invocation)
+    if (principal?.kind !== 'tenant') return
+    this.ctx.get('sessionOwnership')?.claimSession(sessionId, {
+      tenantId: principal.tenantId,
+      userId: principal.userId,
+    })
   }
 
   /**

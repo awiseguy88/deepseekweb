@@ -1,8 +1,9 @@
 /** Host Workspace Remote owner: explicit commands and reconnect-safe state. */
 
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-api-remote-access'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { WorkspaceCommands } from './commands.ts'
@@ -43,6 +44,23 @@ export interface Config {
 
 /** Directory policy after schema defaults have been applied. */
 type ResolvedConfig = Config & { documentsLookupTimeoutMs: number }
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface PrincipalMap {
+    /**
+     * Authenticated hosted tenant caller. The Connection transport that admits
+     * these peers owns the canonical declaration; the Workspace Controller
+     * restates the fields its creation claims read, so its Host program does
+     * not depend on a Connection build being present.
+     */
+    tenant: {
+      readonly kind: 'tenant'
+      readonly tenantId: string
+      readonly userId: string
+      readonly role: 'admin' | 'member'
+    }
+  }
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -88,27 +106,50 @@ export class WorkspaceController extends TypertRemoteService {
    * @returns the Workspace and whether this call created it.
    */
   @Remote('create')
-  create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
-    return this.commands.create(request)
+  async create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
+    const value = await this.commands.create(request)
+    if (value.created) this.claimWorkspaceOwnership(value.workspace.workspaceId)
+    return value
+  }
+
+  /**
+   * Record the caller tenant as owner of a Workspace this call created. The
+   * optional service is absent when the deployment does not partition Workspaces.
+   * @param workspaceId - the Workspace returned by the successful create.
+   */
+  private claimWorkspaceOwnership(workspaceId: WorkspaceId): void {
+    const principal = principalOf(this.ctx.invocation)
+    if (principal?.kind !== 'tenant') return
+    this.ctx.get('workspaceOwnership')?.claimWorkspace(workspaceId, {
+      tenantId: principal.tenantId,
+      userId: principal.userId,
+    })
   }
 
   /**
    * Initialize or reuse the default Workspace during first-use startup. The
    * directory name is fixed, so the Host never renames or relocates an
    * existing default; its initial title is that same name, which browser
-   * consumers label in the reader's language.
+   * consumers label in the reader's language. A tenant caller gets a
+   * tenant-private directory below the resolved root, and the created
+   * Workspace is claimed for that tenant.
    * @param signal - caller lifetime; cancels native directory lookup.
    * @returns the durable Workspace, or undefined when first-use initialization is ineligible; creates no Session or message.
    */
   @Remote('initializeDefault')
   async initializeDefault(signal: AbortSignal): Promise<WorkspaceValue | undefined> {
+    const principal = principalOf(this.ctx.invocation)
+    const tenant = principal?.kind === 'tenant' ? principal : undefined
     const workspace = await this.ctx.workspaceRegistry.initializeDefault(async () => {
       const timeout = AbortSignal.timeout(this.config.documentsLookupTimeoutMs)
-      return await defaultWorkspaceDirectory(
+      const root = await defaultWorkspaceDirectory(
         this.config.documentsDirectory, AbortSignal.any([signal, timeout]),
       )
+      return tenant === undefined ? root : join(root, 'tenants', tenant.tenantId)
     })
-    return workspace === undefined ? undefined : { workspace: workspaceView(workspace) }
+    if (workspace === undefined) return undefined
+    this.claimWorkspaceOwnership(workspace.id)
+    return { workspace: workspaceView(workspace) }
   }
 
   /**

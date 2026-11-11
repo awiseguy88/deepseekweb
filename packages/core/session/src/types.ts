@@ -567,3 +567,30 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/not-found': { readonly sessionId: SessionId }
   }
 }
+
+/** Tenant owner recorded when a non-owner caller creates or forks a Session. */
+export interface SessionOwner {
+  readonly tenantId: string
+  readonly userId: string
+}
+
+/**
+ * Optional Host service recording which tenant may see a Session. The Session
+ * Controller claims every Session a non-owner caller creates; a composition
+ * that does not partition Sessions by tenant leaves the service absent.
+ */
+export interface SessionOwnership {
+  /**
+   * Record the caller tenant as the Session owner for list and call filtering.
+   * @param sessionId - the created Session.
+   * @param owner - the tenant and user that created it.
+   */
+  claimSession(sessionId: SessionId, owner: SessionOwner): void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Absent when the deployment does not partition Sessions by tenant. */
+    sessionOwnership?: SessionOwnership
+  }
+}

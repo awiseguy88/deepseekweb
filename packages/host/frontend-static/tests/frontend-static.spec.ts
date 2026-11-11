@@ -30,7 +30,7 @@ afterEach(async () => {
 })
 
 /** Write a dist fixture and the authenticated Web rows, then boot them through the real Loader. */
-async function loadComposition(options: { landingPage?: boolean } = {}): Promise<Context> {
+async function loadComposition(options: { landingPage?: boolean; loginRedirect?: string } = {}): Promise<Context> {
   root = await mkdtemp(join(tmpdir(), 'dsh-frontend-static-'))
   const dist = join(root, 'dist')
   await mkdir(dist)
@@ -60,6 +60,7 @@ async function loadComposition(options: { landingPage?: boolean } = {}): Promise
     '  config:',
     `    distIndex: '${distIndex}'`,
     ...options.landingPage === true ? [`    landingPage: '${landingPage}'`] : [],
+    ...options.loginRedirect === undefined ? [] : [`    loginRedirect: '${options.loginRedirect}'`],
     '',
   ].join('\n'))
 
@@ -255,6 +256,31 @@ describe('real Loader composition', () => {
     expect(app.status).toBe(200)
     expect(app.body).toContain('shell')
     expect(app.body).not.toContain('public landing')
+  })
+
+  it('redirects signed-out document visitors to the configured sign-in page', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition({ loginRedirect: '/login?next=/' })
+    const port = loaded.webServer.port
+    const base = `http://127.0.0.1:${String(port)}`
+    for (const path of ['/', '/index.html', '/?view=chat']) {
+      const response = await fetch(`${base}${path}`, { redirect: 'manual' })
+      expect(response.status).toBe(302)
+      expect(response.headers.get('location')).toBe('/login?next=/')
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(await response.text()).toBe('')
+    }
+    // Assets keep their ordinary public contract.
+    expect(await request(port, '/app.js')).toMatchObject({ status: 200, body: 'export {}' })
+    expect(await request(port, '/preview.html')).toMatchObject({ status: 200, body: '<body>preview</body>' })
+
+    // The browser token exchange still admits the application shell.
+    const exchange = await fetch(loaded.connection.authenticatedUrl(base), { redirect: 'manual' })
+    expect(exchange.status).toBe(303)
+    const cookie = exchange.headers.get('set-cookie')?.split(';', 1)[0]
+    if (cookie === undefined) throw new Error('login-redirect test did not receive a browser cookie')
+    const app = await request(port, '/', { headers: { cookie } })
+    expect(app.status).toBe(200)
+    expect(app.body).toContain('shell')
   })
 
   it('answers in-process reads for the given Peer without browser authentication', { timeout: 60_000 }, async () => {

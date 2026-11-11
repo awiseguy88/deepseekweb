@@ -3,6 +3,8 @@
  * member support intake. Both routers are pure `Request -> Response` functions
  * so the desktop host and the unit suites exercise the same routing and
  * validation; the exported `handle*` adapters bind them to the Node server.
+ * Admin callers are the platform operator, whose scope is every tenant, and
+ * tenant administrators, whose scope is their own tenant.
  *
  * @module @deepseek-ai/dsh-api-tenant-auth/admin-http
  */
@@ -58,6 +60,10 @@ function notFound(): Response {
   return json({ error: 'not_found' }, 404)
 }
 
+function forbidden(): Response {
+  return json({ error: 'forbidden' }, 403)
+}
+
 function cookieValue(request: Request): string | undefined {
   const value = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))
   return value === undefined ? undefined : decodeURIComponent(value.slice(COOKIE.length + 1))
@@ -79,6 +85,18 @@ async function authenticate(store: TenantAuthStore, request: Request): Promise<T
   return { user, session }
 }
 
+/** An administration caller: the platform operator or one tenant's administrator. */
+export interface AdminCaller {
+  readonly user: TenantUserRecord
+  /** True for the platform operator, whose scope is every tenant; false for a tenant administrator. */
+  readonly platform: boolean
+}
+
+/** Accounts admitted to the admin surface: platform operators and tenant administrators. */
+function isAdminAccount(user: TenantUserRecord): boolean {
+  return user.platformAdmin || user.role === 'admin'
+}
+
 /**
  * Resolve the platform operator behind the session cookie.
  * @param store - tenant identity store.
@@ -88,6 +106,20 @@ async function authenticate(store: TenantAuthStore, request: Request): Promise<T
 export async function resolvePlatformAdmin(store: TenantAuthStore, request: Request): Promise<TenantUserRecord | null> {
   const principal = await authenticate(store, request)
   return principal !== null && principal.user.platformAdmin ? principal.user : null
+}
+
+/**
+ * Resolve an admin-surface caller behind the session cookie: an enabled
+ * platform operator or an enabled tenant administrator.
+ * @param store - tenant identity store.
+ * @param request - incoming browser request.
+ * @returns the account and whether it is the platform operator, or null when
+ * the caller is unauthenticated, disabled, or neither kind of administrator.
+ */
+export async function resolveAdmin(store: TenantAuthStore, request: Request): Promise<AdminCaller | null> {
+  const principal = await authenticate(store, request)
+  if (principal === null || !isAdminAccount(principal.user)) return null
+  return { user: principal.user, platform: principal.user.platformAdmin }
 }
 
 /**
@@ -167,7 +199,28 @@ async function readBody(request: Request): Promise<{ readonly value: Record<stri
   return { value: body.value }
 }
 
-async function overview(store: TenantAuthStore): Promise<Response> {
+/**
+ * Summarize the deployment.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @returns the counts visible to the caller.
+ */
+async function overview(store: TenantAuthStore, tenantScope: string | undefined): Promise<Response> {
+  if (tenantScope !== undefined) {
+    const [tenant, accounts, openRequests, activeSessions] = await Promise.all([
+      store.findTenantById(tenantScope),
+      store.listAccounts(tenantScope),
+      store.listSupportRequests({ status: 'open', tenantId: tenantScope }),
+      store.listSessions({ activeOnly: true, tenantId: tenantScope }),
+    ])
+    return json({
+      customers: tenant === null ? 0 : 1,
+      activeCustomers: tenant !== null && !tenant.disabled && tenant.status === 'active' ? 1 : 0,
+      users: accounts.length,
+      openSupport: openRequests.length,
+      activeSessions: activeSessions.length,
+    })
+  }
   const [tenants, accounts, openRequests, activeSessions] = await Promise.all([
     store.listTenants(),
     store.listAllAccounts(),
@@ -183,8 +236,8 @@ async function overview(store: TenantAuthStore): Promise<Response> {
   })
 }
 
-async function listCustomers(store: TenantAuthStore): Promise<Response> {
-  const [tenants, accounts] = await Promise.all([store.listTenants(), store.listAllAccounts()])
+/** Per-tenant account count and newest activity, keyed by tenant id. */
+function accountStats(accounts: readonly TenantAccountRecord[]): Map<string, { userCount: number; lastSeenAt: Date | null }> {
   const stats = new Map<string, { userCount: number; lastSeenAt: Date | null }>()
   for (const account of accounts) {
     const entry = stats.get(account.tenantId) ?? { userCount: 0, lastSeenAt: null }
@@ -194,6 +247,24 @@ async function listCustomers(store: TenantAuthStore): Promise<Response> {
     }
     stats.set(account.tenantId, entry)
   }
+  return stats
+}
+
+/**
+ * List the customer tenants visible to the caller.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @returns the customer rows with per-tenant user counts and newest activity.
+ */
+async function listCustomers(store: TenantAuthStore, tenantScope: string | undefined): Promise<Response> {
+  if (tenantScope !== undefined) {
+    const [tenant, accounts] = await Promise.all([store.findTenantById(tenantScope), store.listAccounts(tenantScope)])
+    const stats = accountStats(accounts)
+    const customers = tenant === null ? [] : [{ ...tenant, ...(stats.get(tenantScope) ?? { userCount: 0, lastSeenAt: null }) }]
+    return json({ customers })
+  }
+  const [tenants, accounts] = await Promise.all([store.listTenants(), store.listAllAccounts()])
+  const stats = accountStats(accounts)
   const customers = tenants.map(tenant => ({ ...tenant, ...(stats.get(tenant.tenantId) ?? { userCount: 0, lastSeenAt: null }) }))
   return json({ customers })
 }
@@ -277,7 +348,18 @@ async function addCustomerUser(store: TenantAuthStore, tenantId: string, request
   return json(created, 201)
 }
 
-async function updateUser(store: TenantAuthStore, actor: TenantUserRecord, userId: string, request: Request): Promise<Response> {
+async function updateUser(
+  store: TenantAuthStore,
+  actor: TenantUserRecord,
+  tenantScope: string | undefined,
+  userId: string,
+  request: Request,
+): Promise<Response> {
+  if (tenantScope !== undefined) {
+    const account = await store.findAccountById(userId)
+    if (account === null) return notFound()
+    if (account.tenantId !== tenantScope) return forbidden()
+  }
   const body = await readBody(request)
   if ('response' in body) return body.response
   const fields = body.value
@@ -293,6 +375,8 @@ async function updateUser(store: TenantAuthStore, actor: TenantUserRecord, userI
   }
   if (fields.platformAdmin !== undefined) {
     if (typeof fields.platformAdmin !== 'boolean') return invalidRequest()
+    // Only the platform operator may grant or revoke platform rights.
+    if (tenantScope !== undefined) return forbidden()
     patch.platformAdmin = fields.platformAdmin
   }
   if (fields.password !== undefined) {
@@ -303,24 +387,73 @@ async function updateUser(store: TenantAuthStore, actor: TenantUserRecord, userI
   return user === null ? notFound() : json({ user })
 }
 
-async function listSessions(store: TenantAuthStore, url: URL): Promise<Response> {
-  const tenantId = url.searchParams.get('tenantId')
-  const sessions: readonly TenantSessionListRecord[] = await store.listSessions(tenantId === null || tenantId === '' ? {} : { tenantId })
+/**
+ * List sessions within the caller's scope.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @param url - request URL carrying the optional platform tenant filter.
+ * @returns the listed sessions.
+ */
+async function listSessions(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
+  const requested = url.searchParams.get('tenantId')
+  const tenantId = tenantScope ?? (requested === null || requested === '' ? undefined : requested)
+  const sessions: readonly TenantSessionListRecord[] = await store.listSessions(tenantId === undefined ? {} : { tenantId })
   return json({ sessions })
 }
 
-async function revokeSession(store: TenantAuthStore, sessionId: string): Promise<Response> {
+/**
+ * Revoke one session within the caller's scope.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @param sessionId - the session to revoke.
+ * @returns 200 once revoked; 403 for another tenant's session.
+ */
+async function revokeSession(store: TenantAuthStore, tenantScope: string | undefined, sessionId: string): Promise<Response> {
+  if (tenantScope !== undefined) {
+    const session = await store.findSession(sessionId)
+    if (session === null) return notFound()
+    if (session.tenantId !== tenantScope) return forbidden()
+  }
   await store.revokeSession(sessionId)
   return json({ ok: true })
 }
 
-async function listSupportRequests(store: TenantAuthStore, url: URL): Promise<Response> {
+/**
+ * List the support inbox within the caller's scope.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @param url - request URL carrying the optional status filter.
+ * @returns the matching support requests.
+ */
+async function listSupportRequests(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
   const status = url.searchParams.get('status')
   if (status !== null && status !== '' && !isSupportStatus(status)) return invalidRequest()
-  return json({ requests: await store.listSupportRequests(status === null || status === '' ? {} : { status }) })
+  return json({
+    requests: await store.listSupportRequests({
+      ...status === null || status === '' ? {} : { status },
+      ...tenantScope === undefined ? {} : { tenantId: tenantScope },
+    }),
+  })
 }
 
-async function updateSupportRequest(store: TenantAuthStore, requestId: string, request: Request): Promise<Response> {
+/**
+ * Triage one support request within the caller's scope.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @param requestId - the support request to update.
+ * @param request - request carrying the validated patch.
+ * @returns the updated request; 404 when it is absent or belongs to another tenant.
+ */
+async function updateSupportRequest(
+  store: TenantAuthStore,
+  tenantScope: string | undefined,
+  requestId: string,
+  request: Request,
+): Promise<Response> {
+  if (tenantScope !== undefined) {
+    const owned = await store.listSupportRequests({ tenantId: tenantScope })
+    if (!owned.some(candidate => candidate.requestId === requestId)) return notFound()
+  }
   const body = await readBody(request)
   if ('response' in body) return body.response
   const fields = body.value
@@ -341,51 +474,88 @@ async function updateSupportRequest(store: TenantAuthStore, requestId: string, r
   return updated === null ? notFound() : json({ request: updated })
 }
 
-async function sales(store: TenantAuthStore): Promise<Response> {
-  return json({ configured: Boolean(process.env.STRIPE_SECRET_KEY), events: await store.listSalesEvents(100) })
+/**
+ * Report Stripe configuration and the sales ledger within the caller's scope.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @returns the ledger events the caller may see.
+ */
+async function sales(store: TenantAuthStore, tenantScope: string | undefined): Promise<Response> {
+  const events = await store.listSalesEvents(100)
+  return json({
+    configured: Boolean(process.env.STRIPE_SECRET_KEY),
+    events: tenantScope === undefined ? events : events.filter(event => event.tenantId === tenantScope),
+  })
 }
 
 /**
- * Route one `/admin/api/*` request as a platform administrator.
+ * Report the signed-in administrator and its tenant.
+ * @param store - tenant identity store.
+ * @param user - the authenticated administrator.
+ * @returns the identity fields the admin page uses to choose its view.
+ */
+async function whoAmI(store: TenantAuthStore, user: TenantUserRecord): Promise<Response> {
+  const tenant = await store.findTenantById(user.tenantId)
+  return json({
+    email: user.email,
+    role: user.role,
+    platformAdmin: user.platformAdmin,
+    tenantId: user.tenantId,
+    tenantName: tenant?.name ?? '',
+  })
+}
+
+/**
+ * Route one `/admin/api/*` request for a platform operator or a tenant
+ * administrator. A tenant administrator is confined to its own tenant:
+ * platform-wide reads are narrowed, and tenant creation and platform rights
+ * are refused.
  * @param store - tenant identity store.
  * @param request - incoming JSON request.
- * @returns the JSON response; 401 for an absent session, 403 for a non-operator account, 404 for an unknown route.
+ * @returns the JSON response; 401 for an absent session, 403 for an account
+ * that is neither kind of administrator or for an operation outside a tenant
+ * administrator's tenant, 404 for an unknown route.
  */
 export async function adminApiResponse(store: TenantAuthStore, request: Request): Promise<Response> {
   const principal = await authenticate(store, request)
   if (principal === null) return json({ error: 'unauthenticated' }, 401)
-  if (!principal.user.platformAdmin) return json({ error: 'forbidden' }, 403)
+  if (!isAdminAccount(principal.user)) return forbidden()
+  const tenantScope = principal.user.platformAdmin ? undefined : principal.user.tenantId
   const url = new URL(request.url, 'http://localhost')
   const segments = url.pathname.split('/').filter(segment => segment.length > 0)
   const method = request.method
   const resource = segments[2]
   const rest = segments.slice(3)
   if (segments[0] !== 'admin' || segments[1] !== 'api') return notFound()
-  if (resource === 'overview' && rest.length === 0 && method === 'GET') return overview(store)
+  if (resource === 'me' && rest.length === 0 && method === 'GET') return whoAmI(store, principal.user)
+  if (resource === 'overview' && rest.length === 0 && method === 'GET') return overview(store, tenantScope)
   if (resource === 'customers' && rest.length === 0) {
-    if (method === 'GET') return listCustomers(store)
-    if (method === 'POST') return createCustomer(store, request)
+    if (method === 'GET') return listCustomers(store, tenantScope)
+    if (method === 'POST') return tenantScope === undefined ? createCustomer(store, request) : forbidden()
   }
   if (resource === 'customers' && rest.length === 1 && rest[0] !== undefined) {
     const tenantId = decodeURIComponent(rest[0])
+    if (tenantScope !== undefined && tenantId !== tenantScope) return forbidden()
     if (method === 'GET') return customerDetail(store, tenantId)
     if (method === 'POST') return updateCustomer(store, tenantId, request)
   }
   if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'users' && method === 'POST') {
-    return addCustomerUser(store, decodeURIComponent(rest[0]), request)
+    const tenantId = decodeURIComponent(rest[0])
+    if (tenantScope !== undefined && tenantId !== tenantScope) return forbidden()
+    return addCustomerUser(store, tenantId, request)
   }
   if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
-    return updateUser(store, principal.user, decodeURIComponent(rest[0]), request)
+    return updateUser(store, principal.user, tenantScope, decodeURIComponent(rest[0]), request)
   }
-  if (resource === 'sessions' && rest.length === 0 && method === 'GET') return listSessions(store, url)
+  if (resource === 'sessions' && rest.length === 0 && method === 'GET') return listSessions(store, tenantScope, url)
   if (resource === 'sessions' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'revoke' && method === 'POST') {
-    return revokeSession(store, decodeURIComponent(rest[0]))
+    return revokeSession(store, tenantScope, decodeURIComponent(rest[0]))
   }
-  if (resource === 'support' && rest.length === 0 && method === 'GET') return listSupportRequests(store, url)
+  if (resource === 'support' && rest.length === 0 && method === 'GET') return listSupportRequests(store, tenantScope, url)
   if (resource === 'support' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
-    return updateSupportRequest(store, decodeURIComponent(rest[0]), request)
+    return updateSupportRequest(store, tenantScope, decodeURIComponent(rest[0]), request)
   }
-  if (resource === 'sales' && rest.length === 0 && method === 'GET') return sales(store)
+  if (resource === 'sales' && rest.length === 0 && method === 'GET') return sales(store, tenantScope)
   return notFound()
 }
 

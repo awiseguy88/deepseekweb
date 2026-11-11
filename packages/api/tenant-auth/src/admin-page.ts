@@ -6,7 +6,9 @@
  * same-origin `/admin/api/*` JSON endpoints with the session cookie, redirects
  * to `/login` on a `401`, and renders every server-supplied value through
  * `textContent` or `createElement` so tenant, user, support, and Stripe text
- * cannot inject markup.
+ * cannot inject markup. It reads `/admin/api/me` first: a tenant administrator
+ * gets the workspace view (its own users, sessions, and support), while the
+ * platform operator keeps the global customer console.
  *
  * @returns The complete `text/html` document served for `GET /admin`. Repeated
  * calls return byte-identical output.
@@ -40,6 +42,7 @@ a{color:var(--accent-strong)}
 .tab:hover{color:var(--text);background:var(--panel-2)}
 .tab.active,.tab[aria-selected="true"]{color:var(--text);background:var(--panel);border-color:var(--line)}
 main{padding:clamp(1rem,3vw,2rem);max-width:84rem;margin:0 auto}
+.workspace-heading{margin:0 0 1rem;font-size:1.3rem;letter-spacing:-.01em}
 .panel:focus{outline:none}
 .panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:1rem}
 .panel-head h2{margin:0 0 .15rem;font-size:1.45rem;letter-spacing:-.01em}
@@ -130,16 +133,18 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
 <h1 class="sr-only">WiseAI admin console</h1>
 <header class="topbar">
   <div class="brand"><span class="mark" aria-hidden="true">W</span><span>WiseAI</span><span class="tag">Admin</span></div>
-  <div class="topbar-actions"><span class="muted small">Platform operator</span><button type="button" class="btn ghost small" id="signout">Sign out</button></div>
+  <div class="topbar-actions"><span class="muted small" id="console-role">Platform operator</span><button type="button" class="btn ghost small" id="signout">Sign out</button></div>
 </header>
 <nav class="tabs" role="tablist" aria-label="Admin sections">
   <button type="button" class="tab" id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">Overview</button>
   <button type="button" class="tab" id="tab-customers" role="tab" aria-controls="panel-customers" aria-selected="false" tabindex="-1" data-tab="customers">Customers</button>
+  <button type="button" class="tab" id="tab-users" role="tab" aria-controls="panel-users" aria-selected="false" tabindex="-1" data-tab="users" hidden>Users</button>
   <button type="button" class="tab" id="tab-support" role="tab" aria-controls="panel-support" aria-selected="false" tabindex="-1" data-tab="support">Support</button>
   <button type="button" class="tab" id="tab-sessions" role="tab" aria-controls="panel-sessions" aria-selected="false" tabindex="-1" data-tab="sessions">Sessions</button>
   <button type="button" class="tab" id="tab-sales" role="tab" aria-controls="panel-sales" aria-selected="false" tabindex="-1" data-tab="sales">Sales</button>
 </nav>
 <main id="main">
+  <h2 class="workspace-heading" id="workspace-heading" hidden></h2>
   <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
     <div class="panel-head">
       <div><h2>Overview</h2><p class="muted">Deployment health at a glance.</p></div>
@@ -164,6 +169,18 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     <p class="state" id="customers-status" role="status"></p>
     <p class="muted small" id="customers-summary"></p>
     <div class="card"><div id="customers-table"></div></div>
+  </section>
+  <section class="panel" id="panel-users" role="tabpanel" aria-labelledby="tab-users" tabindex="0" hidden>
+    <div class="panel-head">
+      <div><h2>Users</h2><p class="muted">Accounts in your workspace.</p></div>
+      <div class="panel-actions">
+        <button type="button" class="btn ghost" id="users-refresh">Refresh</button>
+        <button type="button" class="btn primary" id="users-add">Add user</button>
+      </div>
+    </div>
+    <p class="state" id="users-status" role="status"></p>
+    <p class="muted small" id="users-summary"></p>
+    <div class="card"><div id="users-table"></div></div>
   </section>
   <section class="panel" id="panel-support" role="tabpanel" aria-labelledby="tab-support" tabindex="0" hidden>
     <div class="panel-head">
@@ -301,9 +318,10 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
 (function () {
   'use strict';
 
-  var TABS = ['overview', 'customers', 'support', 'sessions', 'sales'];
+  var TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales'];
   var state = {
     tab: 'overview',
+    me: null,
     customers: [],
     support: [],
     sessions: [],
@@ -500,6 +518,13 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     }
   }
 
+  function visibleTabs() {
+    return TABS.filter(function (tab) {
+      var button = $('tab-' + tab);
+      return button !== null && !button.hidden;
+    });
+  }
+
   function activateTab(name) {
     if (TABS.indexOf(name) === -1) name = 'overview';
     state.tab = name;
@@ -518,9 +543,83 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
   function loadTab(name) {
     if (name === 'overview') loadOverview();
     else if (name === 'customers') loadCustomers();
+    else if (name === 'users') loadUsers();
     else if (name === 'support') loadSupport();
     else if (name === 'sessions') loadSessions();
     else if (name === 'sales') loadSales();
+  }
+
+  function applyTenantAdmin(me) {
+    var label = 'Workspace admin — ' + (me.tenantName || me.tenantId);
+    $('console-role').textContent = label;
+    var heading = $('workspace-heading');
+    heading.textContent = label;
+    heading.hidden = false;
+    // A tenant administrator manages one workspace: no tenant creation, no
+    // global customer table, and no platform sales ledger.
+    $('tab-customers').hidden = true;
+    $('panel-customers').hidden = true;
+    $('new-customer-open').hidden = true;
+    $('tab-sales').hidden = true;
+    $('panel-sales').hidden = true;
+    $('tab-users').hidden = false;
+    state.customerTenant = me.tenantId;
+  }
+
+  function loadMe() {
+    return api('/admin/api/me').then(function (me) {
+      state.me = me;
+      if (me && !me.platformAdmin) applyTenantAdmin(me);
+    });
+  }
+
+  function loadUsers() {
+    if (!state.me) return;
+    beginLoad('panel-users', 'users-status');
+    api('/admin/api/customers/' + encodeURIComponent(state.me.tenantId)).then(function (payload) {
+      endLoad('panel-users', 'users-status');
+      state.customerTenant = state.me.tenantId;
+      state.customerDetail = payload;
+      renderUsers(payload && payload.users ? payload.users : []);
+    }).catch(function (error) {
+      endLoad('panel-users', 'users-status');
+      failLoad('users-status', error, loadUsers);
+    });
+  }
+
+  function renderUsers(users) {
+    var host = $('users-table');
+    clear(host);
+    $('users-summary').textContent = users.length + ' users.';
+    var rows = users.map(function (user) {
+      var access = make('div', 'row-badges');
+      access.appendChild(badge(user.disabled ? 'disabled' : 'active', user.disabled ? 'danger' : 'ok'));
+      if (user.platformAdmin) access.appendChild(badge('platform admin', 'info'));
+      var role = document.createElement('select');
+      role.className = 'select inline';
+      role.setAttribute('aria-label', 'Role for ' + user.email);
+      ['admin', 'member'].forEach(function (value) {
+        var option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        option.selected = user.role === value;
+        role.appendChild(option);
+      });
+      role.addEventListener('change', function () {
+        updateUser(user.userId, { role: role.value }, 'Role updated.', loadUsers);
+      });
+      return [
+        user.email,
+        role,
+        access,
+        formatDate(user.lastSeenAt),
+        actionButton(user.disabled ? 'Enable' : 'Disable', function () {
+          updateUser(user.userId, { disabled: !user.disabled }, user.disabled ? 'User enabled.' : 'User disabled.', loadUsers);
+        }, user.disabled ? 'ghost' : 'danger'),
+        actionButton('Set password', function () { openPasswordDialog(user); }, 'ghost')
+      ];
+    });
+    host.appendChild(buildTable(['Email', 'Role', 'Access', 'Last seen', '', ''], rows, 'No users in this workspace yet.'));
   }
 
   function loadOverview() {
@@ -755,10 +854,11 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     });
   }
 
-  function updateUser(userId, patch, successMessage) {
+  function updateUser(userId, patch, successMessage, after) {
     api('/admin/api/users/' + encodeURIComponent(userId), { method: 'POST', body: patch }).then(function () {
       toast(successMessage || 'User updated.', 'ok');
-      refreshCustomerDetail();
+      if (after) after();
+      else refreshCustomerDetail();
     }).catch(function (error) {
       toast('Could not update user: ' + error.message, 'error');
     });
@@ -786,7 +886,8 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     }).then(function () {
       toast('User added.', 'ok');
       closeDialog('add-user-dialog');
-      refreshCustomerDetail();
+      if (state.me && !state.me.platformAdmin) loadUsers();
+      else refreshCustomerDetail();
     }).catch(function (error) {
       toast('Could not add user: ' + error.message, 'error');
     }).then(function () {
@@ -983,19 +1084,22 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
   }
 
   function init() {
-    TABS.forEach(function (tab, index) {
+    TABS.forEach(function (tab) {
       var button = $('tab-' + tab);
       button.addEventListener('click', function () { activateTab(tab); });
       button.addEventListener('keydown', function (event) {
+        var tabs = visibleTabs();
+        var index = tabs.indexOf(tab);
+        if (index === -1) return;
         var next = -1;
-        if (event.key === 'ArrowRight') next = (index + 1) % TABS.length;
-        else if (event.key === 'ArrowLeft') next = (index + TABS.length - 1) % TABS.length;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
         else if (event.key === 'Home') next = 0;
-        else if (event.key === 'End') next = TABS.length - 1;
+        else if (event.key === 'End') next = tabs.length - 1;
         if (next !== -1) {
           event.preventDefault();
-          $('tab-' + TABS[next]).focus();
-          activateTab(TABS[next]);
+          $('tab-' + tabs[next]).focus();
+          activateTab(tabs[next]);
         }
       });
     });
@@ -1008,6 +1112,8 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     $('new-customer-form').addEventListener('submit', createCustomer);
     $('customer-profile-form').addEventListener('submit', saveCustomerProfile);
     $('add-user-open').addEventListener('click', openAddUser);
+    $('users-add').addEventListener('click', openAddUser);
+    $('users-refresh').addEventListener('click', loadUsers);
     $('add-user-form').addEventListener('submit', createUser);
     $('password-form').addEventListener('submit', savePassword);
     $('support-filter').addEventListener('change', function (event) {
@@ -1029,7 +1135,11 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (button) {
       button.addEventListener('click', function () { closeDialog(button.getAttribute('data-close')); });
     });
-    activateTab('overview');
+    loadMe().then(function () {
+      activateTab('overview');
+    }).catch(function (error) {
+      failLoad('overview-status', error, function () { window.location.reload(); });
+    });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

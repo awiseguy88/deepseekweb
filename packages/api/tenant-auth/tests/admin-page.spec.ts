@@ -4,7 +4,7 @@ import { renderAdminPage } from '../src/admin-page.ts'
 // Rendered once: the assertions below read the same document the route serves.
 const html = renderAdminPage()
 
-const TABS = ['overview', 'customers', 'support', 'sessions', 'sales'] as const
+const TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales'] as const
 
 describe('renderAdminPage', () => {
   it('returns one complete self-contained HTML document', () => {
@@ -24,7 +24,7 @@ describe('renderAdminPage', () => {
     expect(html).toContain('<main id="main">')
   })
 
-  it('exposes the five sections as an accessible tab set', () => {
+  it('exposes the six sections as an accessible tab set', () => {
     expect(html).toContain('role="tablist"')
     expect(html.match(/role="tab"/g)).toHaveLength(TABS.length)
     expect(html.match(/role="tabpanel"/g)).toHaveLength(TABS.length)
@@ -54,6 +54,7 @@ describe('renderAdminPage', () => {
 
   it('consumes exactly the hosted admin endpoints', () => {
     const paths = [
+      '/admin/api/me',
       '/admin/api/overview',
       '/admin/api/customers',
       '/admin/api/customers/',
@@ -81,10 +82,11 @@ describe('renderAdminPage', () => {
       'openSupport',
       'activeSessions',
       'tenantId',
+      'tenantName',
+      'platformAdmin',
       'stripeCustomerId',
       'stripeSubscriptionId',
       'accessUntil',
-      'platformAdmin',
       'requestId',
       'adminNote',
       'amountTotal',
@@ -92,6 +94,29 @@ describe('renderAdminPage', () => {
       'events',
     ]
     for (const field of fields) expect(html).toContain(field)
+  })
+
+  it('switches to a tenant workspace view from /admin/api/me', () => {
+    // The page asks who it is serving before it renders a view.
+    expect(html).toContain('function loadMe()')
+    expect(html).toContain("api('/admin/api/me')")
+    expect(html).toContain('if (me && !me.platformAdmin) applyTenantAdmin(me);')
+    // The tenant view has its own heading and role label.
+    expect(html).toContain('Workspace admin — ')
+    expect(html).toContain('id="workspace-heading"')
+    expect(html).toContain('id="console-role"')
+    expect(html).toContain('Platform operator')
+    // Tenant administrators keep user management but lose tenant creation,
+    // the global customer table, and the platform sales ledger.
+    expect(html).toContain('id="tab-users"')
+    expect(html).toContain('id="panel-users"')
+    expect(html).toContain("$('tab-customers').hidden = true")
+    expect(html).toContain("$('panel-customers').hidden = true")
+    expect(html).toContain("$('new-customer-open').hidden = true")
+    expect(html).toContain("$('tab-sales').hidden = true")
+    expect(html).toContain("$('tab-users').hidden = false")
+    expect(html).toContain('function renderUsers(users)')
+    expect(html).toContain('function loadUsers()')
   })
 
   it('warns about missing Stripe configuration and links the dashboard', () => {

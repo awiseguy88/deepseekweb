@@ -151,3 +151,30 @@ export interface Workspace {
    */
   status(): Promise<'ok' | 'missing-dir'>
 }
+
+/** Tenant owner recorded when a non-owner caller creates a Workspace. */
+export interface WorkspaceOwner {
+  readonly tenantId: string
+  readonly userId: string
+}
+
+/**
+ * Optional Host service recording which tenant may see a Workspace. The
+ * Workspace Controller claims every Workspace a non-owner caller creates; a
+ * composition that does not partition Workspaces by tenant leaves it absent.
+ */
+export interface WorkspaceOwnership {
+  /**
+   * Record the caller tenant as the Workspace owner for list and call filtering.
+   * @param workspaceId - the created Workspace.
+   * @param owner - the tenant and user that created it.
+   */
+  claimWorkspace(workspaceId: WorkspaceId, owner: WorkspaceOwner): void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Absent when the deployment does not partition Workspaces by tenant. */
+    workspaceOwnership?: WorkspaceOwnership
+  }
+}

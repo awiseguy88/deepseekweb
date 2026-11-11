@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
@@ -7,19 +9,26 @@ import { handleNodeAuthRequest } from './http.ts'
 import type { TenantAuthStore } from './types.ts'
 import { hashPassword } from './password.ts'
 import { createPostgresTenantAuthStore } from './pg-client.ts'
-import { handleAdminApi, handleSupportApi, resolvePlatformAdmin } from './admin-http.ts'
+import { handleAdminApi, handleSupportApi, resolveAdmin } from './admin-http.ts'
 import { renderAdminPage } from './admin-page.ts'
 import { parseStripeEvent, stripeConfig, summarizeStripeEvent, verifyStripeSignature } from './stripe.ts'
+import { createTenantAccess } from './tenant-access.ts'
 
 /** Cordis configuration for the hosted WiseAI tenant auth routes. */
 export interface Config {
   readonly store?: TenantAuthStore
   readonly connectionString?: string
+  /**
+   * Path of the public marketing document served at `/welcome`. Signed-out
+   * document requests are redirected to `/login` instead of rendering it at
+   * the application root; a missing file or unset path answers 404.
+   */
+  readonly landingPage?: string
 }
 
 export const name = 'wiseai-tenant-auth'
 export const inject = ['webServer', 'connection']
-export const Config: z<Config> = z.object({ connectionString: z.string() })
+export const Config: z<Config> = z.object({ connectionString: z.string(), landingPage: z.string() })
 
 /** JSON answer with no-store cache semantics for the hosted admin surface. */
 function json(response: ServerResponse, status: number, value: unknown): void {
@@ -34,6 +43,30 @@ export function apply(ctx: Context, config: Config): void {
     ? createPostgresTenantAuthStore(config.connectionString ?? process.env.DATABASE_URL ?? '')
     : { store: config.store, close: async () => {}, migrate: async () => {} }
   const store = database.store
+  // The tenant access policy is inert until the Gateway and Typert services it
+  // reads are mounted; start() also publishes the ownership services the
+  // Session and Workspace controllers claim through.
+  const access = createTenantAccess({ ctx, store })
+  ctx.inject(['typert', 'remoteAccess'], () => {
+    void access.start().catch((error: unknown) => {
+      console.error('[wiseai-tenant-auth] tenant access policy failed:', error)
+    })
+  })
+  ctx.effect(() => () => access.dispose(), 'wiseai-tenant-auth: tenant access')
+  // The public marketing document lives outside the app shell: signed-out
+  // visitors are redirected to /login, and /welcome is the only public page.
+  const landingPath = config.landingPage === undefined || config.landingPage.trim().length === 0
+    ? undefined
+    : resolve(config.landingPage)
+  let landingCache: Promise<string | undefined> | undefined
+  const readLandingPage = async (): Promise<string | undefined> => {
+    if (landingPath === undefined) return undefined
+    landingCache ??= readFile(landingPath, 'utf8').catch((error: unknown) => {
+      console.warn('[wiseai-tenant-auth] landing page is unavailable:', error)
+      return undefined
+    })
+    return await landingCache
+  }
   const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim()
   const bootstrapPassword = process.env.WISEAI_ADMIN_PASSWORD
   // The schema set is idempotent, so every boot converges an existing database
@@ -90,20 +123,44 @@ export function apply(ctx: Context, config: Config): void {
       handler: (request: IncomingMessage, response: ServerResponse) =>
         stripeWebhook(request, response, stripe, store),
     })
+    const disposeWelcome = webServer.register({
+      kind: 'exact',
+      path: '/welcome',
+      handler: async (request: IncomingMessage, response: ServerResponse) => {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          json(response, 405, { error: 'method_not_allowed' })
+          return
+        }
+        const html = await readLandingPage()
+        if (html === undefined) {
+          response.writeHead(404, { 'cache-control': 'no-store' })
+          response.end()
+          return
+        }
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'content-length': Buffer.byteLength(html),
+        })
+        response.end(request.method === 'HEAD' ? undefined : html)
+      },
+    })
     return async () => {
       disposeLogin()
       dispose()
       disposeAdmin()
       disposeSupport()
       disposeStripe()
+      disposeWelcome()
       await database.close()
     }
   }, 'wiseai-tenant-auth: routes')
 }
 
 /**
- * Dispatch the hosted admin prefix: the page, the platform-API, and the
- * tenant-scoped endpoints that predate the platform surface.
+ * Dispatch the hosted admin prefix: the page, the role-scoped API, and the
+ * tenant-scoped endpoints that predate the platform surface. A platform
+ * operator sees every tenant; a tenant administrator sees only its own.
  */
 async function adminRoute(
   request: IncomingMessage,
@@ -117,7 +174,7 @@ async function adminRoute(
       json(response, 405, { error: 'method_not_allowed' })
       return
     }
-    const admin = await resolvePlatformAdmin(store, nodeRequest(request))
+    const admin = await resolveAdmin(store, nodeRequest(request))
     if (admin === null) {
       response.writeHead(302, { location: '/login?next=/admin', 'cache-control': 'no-store' })
       response.end()

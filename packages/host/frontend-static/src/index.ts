@@ -10,9 +10,12 @@
  * index render (structured injection rows, then raw taps). Non-index assets
  * stay public; every file other than the index carries a weak ETag with
  * `cache-control: no-cache` and answers a matching `If-None-Match` with 304,
- * while the index carries no cache headers. The dist location is workspace
- * knowledge of the composing application, so `distIndex` is typically
- * supplied through a `!!js` expression, never hardcoded by a deployment.
+ * while the index carries no cache headers. An unauthenticated document
+ * request answers the configured `loginRedirect` as a 302 before the landing
+ * document branch, so a hosted deployment can send signed-out visitors to its
+ * sign-in page. The dist location is workspace knowledge of the composing
+ * application, so `distIndex` is typically supplied through a `!!js`
+ * expression, never hardcoded by a deployment.
  * @module @deepseek-ai/dsh-host-frontend-static
  */
 
@@ -31,7 +34,7 @@ export const name = 'frontend-static'
 /** Services required before the authenticated fallback seat can be claimed. */
 export const inject = ['webServer', 'connection']
 
-/** Plugin config: the dist anchor and the optional public landing document. */
+/** Plugin config: the dist anchor, the optional public landing document, and the sign-in redirect. */
 export interface Config {
   /** Absolute path of index.html inside the dist root. */
   distIndex: string
@@ -41,11 +44,19 @@ export interface Config {
    * authorized application index stays the only content behind auth.
    */
   landingPage?: string
+  /**
+   * Location answered with a 302 for an unauthenticated document request
+   * (`/` or `/index.html`), typically the application's sign-in page. When
+   * absent, unauthenticated index requests keep Connection's 401 refusal (or
+   * the landing document above).
+   */
+  loginRedirect?: string
 }
 
 export const Config: z<Config> = z.object({
   distIndex: z.string().required(),
   landingPage: z.string(),
+  loginRedirect: z.string(),
 })
 
 const HTML_MIME = 'text/html; charset=utf-8'
@@ -106,6 +117,8 @@ function bytesBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
  * for the dist root and configured index path.
  * @param readLandingPage - resolves the public landing document to serve
  * instead of the unauthorised index response; undefined keeps the refusal.
+ * @param loginRedirect - location a 401 document request is redirected to
+ * instead of the refusal; undefined keeps the refusal.
  * @returns the dist response; a HEAD response carries the GET status and
  * headers without a body. A file other than the index carries
  * `cache-control: no-cache` and a weak ETag from a SHA-1 of its bytes, and a
@@ -116,6 +129,7 @@ async function serveStatic(
   authorizeIndex: () => Response | PeerScope | undefined,
   renderIndex: (html: string, admittedPeer?: PeerScope) => string,
   readLandingPage?: () => Promise<string | undefined>,
+  loginRedirect?: string,
 ): Promise<Response> {
   const pathname = new URL(request.url).pathname
   const target = resolve(normalize(join(distRoot, decodeURIComponent(pathname))))
@@ -129,6 +143,11 @@ async function serveStatic(
     if (target === distRoot || target === distIndex) {
       const admission = authorizeIndex()
       if (admission instanceof Response) {
+        // A hosted deployment sends a signed-out document visitor to its sign-in
+        // page before considering the public landing document.
+        if (admission.status === 401 && loginRedirect !== undefined && isDocumentPath(pathname)) {
+          return new Response(null, { status: 302, headers: { location: loginRedirect, 'cache-control': 'no-store' } })
+        }
         // The signed-out home page is the deployment's public landing document;
         // every other index refusal (and every non-document path) still uses
         // Connection's authenticated-index contract.
@@ -169,6 +188,9 @@ export function apply(ctx: Context, config: Config): void {
   const landingPath = config.landingPage === undefined || config.landingPage.trim().length === 0
     ? undefined
     : resolve(config.landingPage)
+  const loginRedirect = config.loginRedirect === undefined || config.loginRedirect.trim().length === 0
+    ? undefined
+    : config.loginRedirect.trim()
   // Read once per process: the landing document is deployment content, and a
   // missing file degrades to the authenticated-index refusal rather than a 500.
   let landingCache: Promise<string | undefined> | undefined
@@ -209,6 +231,7 @@ export function apply(ctx: Context, config: Config): void {
       (html, admittedPeer) => ctx.webServer.renderIndex(html, peer ?? admittedPeer ?? ctx.connection.browserPeer)
         .replace(/<head(?:\s[^>]*)?>/i, open => `${open}<base href="./">`),
       readLandingPage,
+      loginRedirect,
     ),
   }), 'frontend-static: fallback seat')
 }

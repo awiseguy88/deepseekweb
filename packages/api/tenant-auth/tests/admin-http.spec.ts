@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminApiResponse,
+  resolveAdmin,
   resolvePlatformAdmin,
   resolveTenantAccount,
   supportApiResponse,
@@ -124,6 +125,8 @@ function salesRecord(overrides: Partial<SalesEventRecord> = {}): SalesEventRecor
 class FakeStore implements TenantAuthStore {
   users: TenantUserRecord[] = []
   session: TenantSessionRecord | null = null
+  /** Session rows returned for an id lookup other than the authentication token. */
+  sessionsById: Record<string, TenantSessionRecord> = {}
   tenants: TenantRecord[] = []
   accounts: TenantAccountRecord[] = []
   sessionLists: TenantSessionListRecord[] = []
@@ -159,8 +162,8 @@ class FakeStore implements TenantAuthStore {
     return this.users.find(user => user.userId === userId) ?? null
   }
 
-  async findSession(_sessionId: string): Promise<TenantSessionRecord | null> {
-    return this.session
+  async findSession(sessionId: string): Promise<TenantSessionRecord | null> {
+    return this.sessionsById[sessionId] ?? this.session
   }
 
   async createSession(): Promise<TenantSessionRecord> {
@@ -240,7 +243,9 @@ class FakeStore implements TenantAuthStore {
 
   async listSupportRequests(filter: { readonly status?: SupportRequestRecord['status']; readonly tenantId?: string; readonly limit?: number } = {}): Promise<readonly SupportRequestRecord[]> {
     this.supportFilters.push(filter)
-    return this.support
+    return this.support.filter(request =>
+      (filter.status === undefined || request.status === filter.status)
+      && (filter.tenantId === undefined || request.tenantId === filter.tenantId))
   }
 
   async updateSupportRequest(requestId: string, patch: SupportRequestPatch): Promise<SupportRequestRecord | null> {
@@ -264,6 +269,17 @@ function signedIn(store: FakeStore, overrides: Partial<TenantUserRecord> = {}): 
   store.users = [user]
   store.session = { sessionId: 'session-admin', userId: user.userId, tenantId: user.tenantId, expiresAt: new Date('2027-01-01T00:00:00.000Z'), revokedAt: null }
   return store
+}
+
+/** A signed-in tenant administrator: tenant-a, without platform rights. */
+function signedInTenantAdmin(overrides: Partial<TenantUserRecord> = {}): FakeStore {
+  return signedIn(new FakeStore(), {
+    userId: 'user-tenant-admin',
+    role: 'admin',
+    platformAdmin: false,
+    tenantId: 'tenant-a',
+    ...overrides,
+  })
 }
 
 function request(path: string, init: RequestInit = {}, authenticated = true): Request {
@@ -336,6 +352,175 @@ describe('admin authorization and routing', () => {
       expect(response.status).toBe(404)
       expect(await response.json()).toEqual({ error: 'not_found' })
     }
+  })
+})
+
+describe('admin resolution', () => {
+  it('accepts platform operators and tenant administrators, and denies members and disabled accounts', async () => {
+    const platform = await resolveAdmin(signedIn(new FakeStore()), request('/admin/api/me'))
+    expect(platform).toMatchObject({ platform: true, user: { userId: 'user-admin' } })
+
+    const tenant = await resolveAdmin(signedInTenantAdmin(), request('/admin/api/me'))
+    expect(tenant).toMatchObject({ platform: false, user: { userId: 'user-tenant-admin', tenantId: 'tenant-a' } })
+
+    const member = signedIn(new FakeStore(), { role: 'member', platformAdmin: false })
+    expect(await resolveAdmin(member, request('/admin/api/me'))).toBeNull()
+    expect(await resolveAdmin(signedInTenantAdmin({ disabled: true }), request('/admin/api/me'))).toBeNull()
+    expect(await resolveAdmin(signedInTenantAdmin(), request('/admin/api/me', {}, false))).toBeNull()
+  })
+
+  it('lets a tenant administrator reach the admin API while a member stays forbidden', async () => {
+    const tenant = await adminApiResponse(signedInTenantAdmin(), request('/admin/api/me'))
+    expect(tenant.status).toBe(200)
+
+    const memberStore = signedIn(new FakeStore(), { role: 'member', platformAdmin: false })
+    const forbidden = await adminApiResponse(memberStore, request('/admin/api/overview'))
+    expect(forbidden.status).toBe(403)
+    expect(await forbidden.json()).toEqual({ error: 'forbidden' })
+  })
+
+  it('reports the signed-in administrator and tenant name', async () => {
+    const store = signedInTenantAdmin()
+    store.tenants = [tenantRecord({ tenantId: 'tenant-a', name: 'Acme' })]
+    const response = await adminApiResponse(store, request('/admin/api/me'))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      email: 'admin@example.com',
+      role: 'admin',
+      platformAdmin: false,
+      tenantId: 'tenant-a',
+      tenantName: 'Acme',
+    })
+
+    const platformStore = signedIn(new FakeStore())
+    const platform = await adminApiResponse(platformStore, request('/admin/api/me'))
+    expect(await platform.json()).toMatchObject({ platformAdmin: true, tenantId: 'tenant-ops', tenantName: '' })
+  })
+})
+
+describe('tenant-scoped administration', () => {
+  it('counts only the tenant in the overview', async () => {
+    const store = signedInTenantAdmin()
+    store.tenants = [tenantRecord({ tenantId: 'tenant-a' }), tenantRecord({ tenantId: 'tenant-b' })]
+    store.accounts = [accountRecord(), accountRecord({ userId: 'user-2' }), accountRecord({ userId: 'user-3', tenantId: 'tenant-b' })]
+    store.support = [supportRecord(), supportRecord({ requestId: 'request-2', tenantId: 'tenant-b' })]
+    store.sessionLists = [sessionListRecord()]
+    const response = await adminApiResponse(store, request('/admin/api/overview'))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ customers: 1, activeCustomers: 1, users: 2, openSupport: 1, activeSessions: 1 })
+    expect(store.supportFilters).toEqual([{ status: 'open', tenantId: 'tenant-a' }])
+    expect(store.sessionFilters).toEqual([{ activeOnly: true, tenantId: 'tenant-a' }])
+  })
+
+  it('lists and reads only the tenant, and refuses another tenant', async () => {
+    const store = signedInTenantAdmin()
+    store.tenants = [tenantRecord({ tenantId: 'tenant-a' }), tenantRecord({ tenantId: 'tenant-b' })]
+    store.accounts = [accountRecord(), accountRecord({ userId: 'user-3', tenantId: 'tenant-b' })]
+    store.sessionLists = [sessionListRecord()]
+
+    const list = await adminApiResponse(store, request('/admin/api/customers'))
+    const listed = await list.json() as { customers: { tenantId: string; userCount: number }[] }
+    expect(listed.customers).toEqual([expect.objectContaining({ tenantId: 'tenant-a', userCount: 1 })])
+
+    const detail = await adminApiResponse(store, request('/admin/api/customers/tenant-a'))
+    expect(detail.status).toBe(200)
+    expect(store.sessionFilters).toEqual([{ tenantId: 'tenant-a' }])
+
+    const other = await adminApiResponse(store, request('/admin/api/customers/tenant-b'))
+    expect(other.status).toBe(403)
+    expect(await other.json()).toEqual({ error: 'forbidden' })
+    const otherPatch = await adminApiResponse(store, jsonPost('/admin/api/customers/tenant-b', { plan: 'free' }))
+    expect(otherPatch.status).toBe(403)
+    const otherUser = await adminApiResponse(store, jsonPost('/admin/api/customers/tenant-b/users', {
+      email: 'new@example.com', password: 'a-long-enough-password', role: 'member',
+    }))
+    expect(otherUser.status).toBe(403)
+  })
+
+  it('forces the tenant on the session list and refuses another session', async () => {
+    const store = signedInTenantAdmin()
+    const expiresAt = new Date('2026-02-14T10:00:00.000Z')
+    store.sessionsById = {
+      'session-own': { sessionId: 'session-own', userId: 'user-1', tenantId: 'tenant-a', expiresAt, revokedAt: null },
+      'session-foreign': { sessionId: 'session-foreign', userId: 'user-3', tenantId: 'tenant-b', expiresAt, revokedAt: null },
+    }
+    const scoped = await adminApiResponse(store, request('/admin/api/sessions?tenantId=tenant-b'))
+    expect(scoped.status).toBe(200)
+    expect(store.sessionFilters).toEqual([{ tenantId: 'tenant-a' }])
+
+    const own = await adminApiResponse(store, jsonPost('/admin/api/sessions/session-own/revoke', {}))
+    expect(own.status).toBe(200)
+    expect(store.revoked).toEqual(['session-own'])
+
+    const foreign = await adminApiResponse(store, jsonPost('/admin/api/sessions/session-foreign/revoke', {}))
+    expect(foreign.status).toBe(403)
+    expect(store.revoked).toEqual(['session-own'])
+  })
+
+  it('forbids tenant creation and platform-right promotion', async () => {
+    const store = signedInTenantAdmin()
+    const created = await adminApiResponse(store, jsonPost('/admin/api/customers', {
+      name: 'Acme',
+      plan: 'pro',
+      adminEmail: 'new@example.com',
+      password: 'correct-horse-battery',
+    }))
+    expect(created.status).toBe(403)
+    expect(store.tenantInputs).toHaveLength(0)
+
+    store.accounts = [accountRecord({ userId: 'user-2' })]
+    const promote = await adminApiResponse(store, jsonPost('/admin/api/users/user-2', { platformAdmin: true }))
+    expect(promote.status).toBe(403)
+    const mixed = await adminApiResponse(store, jsonPost('/admin/api/users/user-2', { disabled: true, platformAdmin: false }))
+    expect(mixed.status).toBe(403)
+    expect(store.accountUpdates).toHaveLength(0)
+  })
+
+  it('confines user updates to the tenant and still refuses self-disable', async () => {
+    const store = signedInTenantAdmin()
+    store.accounts = [
+      accountRecord({ userId: 'user-tenant-admin' }),
+      accountRecord({ userId: 'user-2' }),
+      accountRecord({ userId: 'user-3', tenantId: 'tenant-b' }),
+    ]
+    const own = await adminApiResponse(store, jsonPost('/admin/api/users/user-2', { role: 'member' }))
+    expect(own.status).toBe(200)
+    expect(store.accountUpdates).toEqual([{ userId: 'user-2', patch: { role: 'member' } }])
+
+    const other = await adminApiResponse(store, jsonPost('/admin/api/users/user-3', { role: 'member' }))
+    expect(other.status).toBe(403)
+    expect(store.accountUpdates).toHaveLength(1)
+
+    const selfDisable = await adminApiResponse(store, jsonPost('/admin/api/users/user-tenant-admin', { disabled: true }))
+    expect(selfDisable.status).toBe(400)
+    expect(await selfDisable.json()).toEqual({ error: 'invalid_request' })
+    expect(store.accountUpdates).toHaveLength(1)
+  })
+
+  it('scopes the support inbox and triage to the tenant', async () => {
+    const store = signedInTenantAdmin()
+    store.support = [supportRecord(), supportRecord({ requestId: 'request-2', tenantId: 'tenant-b' })]
+    const list = await adminApiResponse(store, request('/admin/api/support'))
+    expect(list.status).toBe(200)
+    expect(store.supportFilters).toEqual([{ tenantId: 'tenant-a' }])
+    expect((await list.json() as { requests: { requestId: string }[] }).requests.map(entry => entry.requestId)).toEqual(['request-1'])
+
+    const own = await adminApiResponse(store, jsonPost('/admin/api/support/request-1', { status: 'closed' }))
+    expect(own.status).toBe(200)
+    expect(store.supportUpdates).toEqual([{ requestId: 'request-1', patch: { status: 'closed' } }])
+
+    const foreign = await adminApiResponse(store, jsonPost('/admin/api/support/request-2', { status: 'closed' }))
+    expect(foreign.status).toBe(404)
+    expect(store.supportUpdates).toHaveLength(1)
+  })
+
+  it('reports only the tenant sales events', async () => {
+    const store = signedInTenantAdmin()
+    store.sales = [salesRecord(), salesRecord({ eventId: 'evt-2', tenantId: 'tenant-b' })]
+    const response = await adminApiResponse(store, request('/admin/api/sales'))
+    expect(response.status).toBe(200)
+    expect((await response.json() as { events: { eventId: string }[] }).events.map(event => event.eventId)).toEqual(['evt-1'])
+    expect(store.salesLimits).toEqual([100])
   })
 })
 

@@ -34,11 +34,14 @@ export {
   adminApiResponse,
   handleAdminApi,
   handleSupportApi,
+  resolveAdmin,
   resolvePlatformAdmin,
   resolveTenantAccount,
   supportApiResponse,
 } from './admin-http.ts'
 export { renderAdminPage } from './admin-page.ts'
+export { createTenantAccess } from './tenant-access.ts'
+export type { TenantAccess, TenantAccessOptions } from './tenant-access.ts'
 export {
   createCheckoutLink,
   parseStripeEvent,

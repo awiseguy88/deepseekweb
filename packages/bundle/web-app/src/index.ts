@@ -77,6 +77,12 @@ export interface Config {
    * document instead of the authentication refusal.
    */
   landingPage?: string
+  /**
+   * Location answered with a 302 for an unauthenticated document request,
+   * typically the application's sign-in page (for example `/login?next=/`).
+   * Takes precedence over `landingPage` for signed-out document visitors.
+   */
+  loginRedirect?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -85,6 +91,7 @@ export const Config: z<Config> = z.object({
   surfaceContext: z.boolean().default(true),
   publicUrl: z.transform(z.string(), value => parsePublicUrl(value).href),
   landingPage: z.string(),
+  loginRedirect: z.string(),
 })
 
 /** Environment variable naming the advertised URL of this Web GUI. */
@@ -214,9 +221,13 @@ export function apply(ctx: Context, config: Config): void {
   const landingPage = config.landingPage === undefined || config.landingPage.trim().length === 0
     ? undefined
     : resolve(config.landingPage)
+  const loginRedirect = config.loginRedirect === undefined || config.loginRedirect.trim().length === 0
+    ? undefined
+    : config.loginRedirect.trim()
   ctx.plugin(FrontendStatic, {
     distIndex: internals.resolveDistIndex(),
     ...landingPage === undefined ? {} : { landingPage },
+    ...loginRedirect === undefined ? {} : { loginRedirect },
   })
   if (config.surfaceContext) {
     ctx.inject(['shellEnv'], (runtimeCtx) => {

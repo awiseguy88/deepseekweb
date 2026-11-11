@@ -10,7 +10,13 @@ Run `migrations/001_tenant_auth.sql` and `migrations/002_wiseai_admin.sql` again
 
 ## Hosted administration
 
-Platform operators reach the admin surface at `/admin`; the page redirects to `/login?next=/admin` until a platform-operator account signs in. The page and its JSON API under `/admin/api/*` manage customer tenants, accounts, sessions, the support inbox, and the Stripe sales ledger. A tenant-scoped `/admin/users` endpoint remains for tenant administrators.
+The hosted application is closed: signed-out document requests are redirected to `/login`, and only the public marketing page remains open at `/welcome` (`WISEAI_LANDING_PAGE`, served by this plugin). Login is required before the app shell renders.
+
+Platform operators reach the admin surface at `/admin`; tenant administrators use the same page, scoped to their own tenant. The page and its JSON API under `/admin/api/*` manage customer tenants, accounts, sessions, the support inbox, and the Stripe sales ledger. A tenant-scoped `/admin/users` endpoint remains for tenant administrators.
+
+## Tenant isolation
+
+Every Session a signed-in tenant creates is claimed for that tenant (along with Workspaces), and a single `remoteAccess` policy for the `tenant` principal kind exposes only those resources: list calls filter through the policy bindings, and Session/Workspace calls and forwarded events are refused unless the resource belongs to the caller's tenant. Ownership is persisted in the `wiseai_session_owners` and `wiseai_workspace_owners` tables and hydrated on boot, so isolation survives restarts. The process-token owner peer (the URL printed by `dsh web`) remains unrestricted for operations.
 
 Signed-in customers file support requests from the in-app **Need help?** control; the plugin accepts them at `POST /support/requests` and joins them with the tenant and account for the admin inbox. The request carries only subject, message, and page URL — the tenant and account come from the session.
 

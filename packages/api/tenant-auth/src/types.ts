@@ -147,6 +147,43 @@ export interface SalesEventInput {
   readonly status: string | null
 }
 
+/** One Session recorded as owned by a tenant, as persisted. */
+export interface TenantSessionOwnerRecord {
+  readonly sessionId: string
+  readonly tenantId: string
+  readonly userId: string
+}
+
+/** One Workspace recorded as owned by a tenant, as persisted. */
+export interface TenantWorkspaceOwnerRecord {
+  readonly workspaceId: string
+  readonly tenantId: string
+  readonly userId: string
+}
+
+/** Input recording the tenant and user that own one Session. */
+export interface ClaimSessionOwnerInput {
+  readonly sessionId: string
+  readonly tenantId: string
+  readonly userId: string
+}
+
+/** Input recording the tenant and user that own one Workspace. */
+export interface ClaimWorkspaceOwnerInput {
+  readonly workspaceId: string
+  readonly tenantId: string
+  readonly userId: string
+}
+
+/**
+ * The ownership members of {@link TenantAuthStore} narrowed to their required
+ * form; a composition that partitions resources by tenant requires all four.
+ */
+export type TenantOwnershipStore = Required<Pick<
+  TenantAuthStore,
+  'listSessionOwners' | 'claimSessionOwner' | 'listWorkspaceOwners' | 'claimWorkspaceOwner'
+>>
+
 /** Namespaced filesystem roots; callers must resolve these from the authenticated tenant. */
 export interface TenantRoots {
   readonly root: string
@@ -203,6 +240,27 @@ export interface TenantAuthStore {
   updateSupportRequest(requestId: string, patch: SupportRequestPatch): Promise<SupportRequestRecord | null>
   recordSalesEvent(input: SalesEventInput): Promise<void>
   listSalesEvents(limit?: number): Promise<readonly SalesEventRecord[]>
+
+  /*
+   * Tenant ownership of Sessions and Workspaces. Optional so an identity-only
+   * store (and its test doubles) keeps satisfying this seam; a composition
+   * that mounts tenant access requires the {@link TenantOwnershipStore}
+   * members and fails loud at startup when they are absent.
+   */
+  /** @returns every persisted Session owner, in any order. */
+  listSessionOwners?(): Promise<readonly TenantSessionOwnerRecord[]>
+  /**
+   * Record one Session owner; an existing claim keeps its owner.
+   * @param input - the created Session and its tenant and user.
+   */
+  claimSessionOwner?(input: ClaimSessionOwnerInput): Promise<void>
+  /** @returns every persisted Workspace owner, in any order. */
+  listWorkspaceOwners?(): Promise<readonly TenantWorkspaceOwnerRecord[]>
+  /**
+   * Record one Workspace owner; an existing claim keeps its owner.
+   * @param input - the created Workspace and its tenant and user.
+   */
+  claimWorkspaceOwner?(input: ClaimWorkspaceOwnerInput): Promise<void>
 }
 
 /** Resolve tenant-owned directories from a trusted server-side identity. */
