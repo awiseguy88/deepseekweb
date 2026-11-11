@@ -19,9 +19,6 @@ if [ "${WISEAI_AUTH_REQUIRED:-0}" = "1" ]; then
   # the repository at /app, so the default needs no Railway variable.
   : "${WISEAI_LANDING_PAGE:=/app/wiseai-immersive.html}"
   export WISEAI_LANDING_PAGE
-  # Send signed-out document requests to the application sign-in page.
-  : "${WISEAI_LOGIN_REDIRECT:=/login?next=/}"
-  export WISEAI_LOGIN_REDIRECT
 fi
 
 if [ -n "${DSH_WEB_PUBLIC_URL:-}" ]; then

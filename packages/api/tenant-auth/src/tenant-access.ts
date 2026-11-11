@@ -327,28 +327,6 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
   async function hydrate(): Promise<void> {
     const runtime = readService(ctx, 'typert') as TenantAccessRuntime
     registrar = readService(ctx, 'remoteAccess') as TenantAccessRegistrar
-    const [sessionOwners, workspaceOwners] = await Promise.all([
-      ownership.listSessionOwners(),
-      ownership.listWorkspaceOwners(),
-    ])
-    if (disposed) return
-    for (const owner of sessionOwners) {
-      let ids = sessions.get(owner.tenantId)
-      if (ids === undefined) {
-        ids = new Set<SessionId>()
-        sessions.set(owner.tenantId, ids)
-      }
-      // The durable store returns the wire identity; Session ids are branded at this boundary.
-      ids.add(owner.sessionId as SessionId)
-    }
-    for (const owner of workspaceOwners) {
-      let ids = workspaces.get(owner.tenantId)
-      if (ids === undefined) {
-        ids = new Set<TenantWorkspaceId>()
-        workspaces.set(owner.tenantId, ids)
-      }
-      ids.add(owner.workspaceId as TenantWorkspaceId)
-    }
     actions = currentActions(runtime)
     unsubscribe = runtime.remotes.subscribe(() => {
       actions = currentActions(runtime)
@@ -363,6 +341,36 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
       ctx.provide('workspaceOwnership', workspaceOwnership),
     )
     started = true
+    // Registration above must not wait for the database: a slow or failed
+    // ownership read would otherwise refuse every tenant call. A failed
+    // hydration keeps the policy live and is reported; new claims still
+    // populate memory and the store.
+    try {
+      const [sessionOwners, workspaceOwners] = await Promise.all([
+        ownership.listSessionOwners(),
+        ownership.listWorkspaceOwners(),
+      ])
+      if (disposed) return
+      for (const owner of sessionOwners) {
+        let ids = sessions.get(owner.tenantId)
+        if (ids === undefined) {
+          ids = new Set<SessionId>()
+          sessions.set(owner.tenantId, ids)
+        }
+        // The durable store returns the wire identity; Session ids are branded at this boundary.
+        ids.add(owner.sessionId as SessionId)
+      }
+      for (const owner of workspaceOwners) {
+        let ids = workspaces.get(owner.tenantId)
+        if (ids === undefined) {
+          ids = new Set<TenantWorkspaceId>()
+          workspaces.set(owner.tenantId, ids)
+        }
+        ids.add(owner.workspaceId as TenantWorkspaceId)
+      }
+    } catch (error) {
+      console.error('[wiseai-tenant-auth] failed to load tenant resource ownership:', error)
+    }
   }
 
   return {
@@ -370,7 +378,11 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
     workspaceOwnership,
     start(): Promise<void> {
       if (started || disposed) return Promise.resolve()
-      starting ??= hydrate()
+      starting ??= hydrate().catch((error: unknown) => {
+        // A failed registration may be retried once its services are ready.
+        starting = undefined
+        throw error
+      })
       return starting
     },
     dispose(): void {

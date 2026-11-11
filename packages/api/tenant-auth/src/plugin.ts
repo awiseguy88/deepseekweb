@@ -43,18 +43,26 @@ export function apply(ctx: Context, config: Config): void {
     ? createPostgresTenantAuthStore(config.connectionString ?? process.env.DATABASE_URL ?? '')
     : { store: config.store, close: async () => {}, migrate: async () => {} }
   const store = database.store
+  const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim()
+  const bootstrapPassword = process.env.WISEAI_ADMIN_PASSWORD
+  // The schema set is idempotent, so every boot converges an existing database
+  // and a fresh Railway database to the current columns and tables.
+  const migration = database.migrate().catch((error: unknown) => {
+    console.error('[wiseai-tenant-auth] schema migration failed:', error)
+  })
   // The tenant access policy is inert until the Gateway and Typert services it
   // reads are mounted; start() also publishes the ownership services the
-  // Session and Workspace controllers claim through.
+  // Session and Workspace controllers claim through. Start after the schema
+  // settles so the ownership tables exist for the first hydration.
   const access = createTenantAccess({ ctx, store })
   ctx.inject(['typert', 'remoteAccess'], () => {
-    void access.start().catch((error: unknown) => {
+    void migration.then(() => access.start()).catch((error: unknown) => {
       console.error('[wiseai-tenant-auth] tenant access policy failed:', error)
     })
   })
   ctx.effect(() => () => access.dispose(), 'wiseai-tenant-auth: tenant access')
-  // The public marketing document lives outside the app shell: signed-out
-  // visitors are redirected to /login, and /welcome is the only public page.
+  // The public marketing document is served at the application root; the
+  // signed-out gate stays on the application itself after a sign-in attempt.
   const landingPath = config.landingPage === undefined || config.landingPage.trim().length === 0
     ? undefined
     : resolve(config.landingPage)
@@ -67,13 +75,6 @@ export function apply(ctx: Context, config: Config): void {
     })
     return await landingCache
   }
-  const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim()
-  const bootstrapPassword = process.env.WISEAI_ADMIN_PASSWORD
-  // The schema set is idempotent, so every boot converges an existing database
-  // and a fresh Railway database to the current columns and tables.
-  const migration = database.migrate().catch((error: unknown) => {
-    console.error('[wiseai-tenant-auth] schema migration failed:', error)
-  })
   if (bootstrapEmail !== undefined && bootstrapEmail.length > 0) {
     void migration.then(async () => {
       const existing = await store.findUserByEmail(bootstrapEmail)

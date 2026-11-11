@@ -10,7 +10,7 @@ Run `migrations/001_tenant_auth.sql` and `migrations/002_wiseai_admin.sql` again
 
 ## Hosted administration
 
-The hosted application is closed: signed-out document requests are redirected to `/login`, and only the public marketing page remains open at `/welcome` (`WISEAI_LANDING_PAGE`, served by this plugin). Login is required before the app shell renders.
+The marketing page is served publicly at `/` (`WISEAI_LANDING_PAGE`, served by the web app's static layer); the application itself is closed behind `/login`. Login is required before the app shell renders.
 
 Platform operators reach the admin surface at `/admin`; tenant administrators use the same page, scoped to their own tenant. The page and its JSON API under `/admin/api/*` manage customer tenants, accounts, sessions, the support inbox, and the Stripe sales ledger. A tenant-scoped `/admin/users` endpoint remains for tenant administrators.
 
