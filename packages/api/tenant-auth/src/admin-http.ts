@@ -567,6 +567,19 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
     return updateSupportRequest(store, tenantScope, decodeURIComponent(rest[0]), request)
   }
   if (resource === 'sales' && rest.length === 0 && method === 'GET') return sales(store, tenantScope)
+  if (resource === 'cleanup' && rest.length === 0 && method === 'POST') {
+    if (tenantScope !== undefined) return forbidden()
+    const tenants = await store.listTenants()
+    let deleted = 0
+    for (const tenant of tenants) {
+      if (tenant.tenantId === principal.user.tenantId) continue
+      const accounts = await store.listAccounts(tenant.tenantId)
+      if (accounts.some(account => account.platformAdmin)) continue
+      if (await store.deleteTenant(tenant.tenantId)) deleted += 1
+    }
+    const revoked = await store.revokeSessions({})
+    return json({ ok: true, deleted, revoked })
+  }
   return notFound()
 }
 

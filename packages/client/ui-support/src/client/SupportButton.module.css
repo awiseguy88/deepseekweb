@@ -3,7 +3,7 @@
 .action {
   display: flex;
   min-width: 0;
-  width: 100%;
+  width: auto;
 }
 
 /* The collapsed footer centers each action on its own trigger. */
@@ -14,7 +14,7 @@
 /* Wide trigger row: same 42px cell, label gap, and padding as the Settings
    row below it, so the two foot rows read as one column. */
 .trigger {
-  flex: 1;
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--dsh-sidebar-label-gap, 8px);
@@ -148,16 +148,17 @@
   line-height: 22px;
 }
 
-/* Hosted account menu: two compact footer rows under Need help?. */
+/* Hosted account menu: Account and Sign out inline beside Settings. */
 .tenantActions {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  width: auto;
 }
 
 .tenantActionsRail {
-  width: auto;
+  display: none;
 }
 
 .tenantButton {
@@ -169,7 +170,7 @@
   color: var(--dsw-alias-label-primary);
   font-family: inherit;
   font-size: 13px;
-  text-align: left;
+  white-space: nowrap;
   cursor: pointer;
   overflow: hidden;
 }

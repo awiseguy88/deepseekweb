@@ -29,10 +29,10 @@ export function TenantAccountActions({ wide, t }: TenantAccountActionsProps) {
     return () => { live = false }
   }, [])
 
-  if (signedIn !== true) return null
+  if (signedIn !== true || !wide) return null
   const label = (key: 'account.label' | 'account.signOut'): string => t(key)
   return (
-    <div className={wide ? css.tenantActions : `${css.tenantActions} ${css.tenantActionsRail}`}>
+    <div className={css.tenantActions}>
       <button type="button" className={css.tenantButton} onClick={() => { window.location.assign('/account') }}>
         {label('account.label')}
       </button>

@@ -68,6 +68,13 @@ async function handle(store: TenantAuthStore, request: Request, registrar?: Tena
     const user = await store.findUserByEmail(body.email.trim())
     if (user === null || user.disabled || !(await verifyPassword(body.password, user.passwordHash))) return json({ error: 'invalid_credentials' }, { status: 401 })
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000)
+    // One live sign-in per account: a new login retires earlier sessions so
+    // the admin dashboard's active-session count reflects real users.
+    try {
+      await store.revokeSessions({ userId: user.userId })
+    } catch (error) {
+      console.error('[wiseai-tenant-auth] could not retire earlier sessions:', error)
+    }
     const token = await issueSession(store, user, expiresAt)
     try {
       await registrar?.register(token, {

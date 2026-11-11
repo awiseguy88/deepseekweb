@@ -781,21 +781,26 @@
 .footArea {
   flex: none;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
 }
 
-.settingsArea,
+.settingsArea {
+  flex: 1;
+  min-width: 0;
+}
+
 .footerActions {
   flex: none;
-  min-width: 0;
-  width: 100%;
-}
-
-.footerActions {
   display: flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
 }
 
 .collapsed .footArea {
+  flex-direction: column;
   align-items: center;
 }
 

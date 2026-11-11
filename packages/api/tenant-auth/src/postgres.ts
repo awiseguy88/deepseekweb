@@ -484,16 +484,21 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return result.rows.length > 0
   }
 
-  async revokeSessions(filter: { readonly tenantId?: string } = {}): Promise<number> {
-    const result = filter.tenantId === undefined
-      ? await this.db.query<{ session_id: string }>(
-        'UPDATE wiseai_sessions SET revoked_at = now() WHERE revoked_at IS NULL RETURNING session_id',
-        [],
-      )
-      : await this.db.query<{ session_id: string }>(
-        'UPDATE wiseai_sessions SET revoked_at = now() WHERE revoked_at IS NULL AND tenant_id = $1 RETURNING session_id',
-        [filter.tenantId],
-      )
+  async revokeSessions(filter: { readonly tenantId?: string; readonly userId?: string } = {}): Promise<number> {
+    const conditions = ['revoked_at IS NULL']
+    const parameters: unknown[] = []
+    if (filter.tenantId !== undefined) {
+      parameters.push(filter.tenantId)
+      conditions.push(`tenant_id = $${parameters.length}`)
+    }
+    if (filter.userId !== undefined) {
+      parameters.push(filter.userId)
+      conditions.push(`user_id = $${parameters.length}`)
+    }
+    const result = await this.db.query<{ session_id: string }>(
+      `UPDATE wiseai_sessions SET revoked_at = now() WHERE ${conditions.join(' AND ')} RETURNING session_id`,
+      parameters,
+    )
     return result.rows.length
   }
 
