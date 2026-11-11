@@ -578,6 +578,58 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
   const principal = await authenticate(store, request)
   if (principal === null) return json({ error: 'unauthenticated' }, 401)
   if (!isAdminAccount(principal.user)) return forbidden()
+  const response = await dispatchAdmin(store, principal, request)
+  if (request.method === 'POST' && response.ok) await recordMutationAudit(store, principal.user, request)
+  return response
+}
+
+/**
+ * Audit action for one successful mutating admin route. The customer-delete
+ * handler records its own detailed soft-delete event, so this returns
+ * undefined for it to keep one record per action.
+ * @param segments - decoded path segments below `/admin/api`.
+ * @returns the action name and optional customer scope, or undefined.
+ */
+function mutationAuditAction(segments: readonly string[]): { action: string; targetTenantId?: string } | undefined {
+  const [, , resource, first, second] = segments
+  if (resource === 'customers' && first === undefined) return { action: 'customer.create' }
+  if (resource === 'customers' && second === undefined && first !== undefined) return { action: 'customer.update', targetTenantId: first }
+  if (resource === 'customers' && second === 'users' && first !== undefined) return { action: 'user.create', targetTenantId: first }
+  if (resource === 'customers' && second === 'delete') return undefined
+  if (resource === 'users' && first !== undefined) return { action: 'user.update' }
+  if (resource === 'sessions' && first === 'revoke-all') return { action: 'session.revoke_all' }
+  if (resource === 'sessions' && first === 'purge-revoked') return { action: 'session.purge_revoked' }
+  if (resource === 'sessions' && second === 'revoke' && first !== undefined) return { action: 'session.revoke' }
+  if (resource === 'support' && first !== undefined) return { action: 'support.update' }
+  return undefined
+}
+
+/** Append one audit record for the completed admin mutation; logging never changes the response. */
+async function recordMutationAudit(store: TenantAuthStore, actor: TenantUserRecord, request: Request): Promise<void> {
+  const url = new URL(request.url, 'http://localhost')
+  const segments = url.pathname.split('/').filter(segment => segment.length > 0)
+  const mapped = mutationAuditAction(segments)
+  if (mapped === undefined) return
+  const third = segments[3]
+  try {
+    await store.recordAuditEvent({
+      action: mapped.action,
+      actorUserId: actor.userId,
+      actorTenantId: actor.tenantId,
+      ...mapped.targetTenantId === undefined ? {} : { targetTenantId: mapped.targetTenantId },
+      ...third === undefined ? {} : { targetId: third },
+      details: { path: url.pathname },
+    })
+  } catch (error) {
+    console.error('[wiseai-tenant-auth] audit write failed:', error)
+  }
+}
+
+async function dispatchAdmin(
+  store: TenantAuthStore,
+  principal: { readonly user: TenantUserRecord },
+  request: Request,
+): Promise<Response> {
   const tenantScope = principal.user.platformAdmin ? undefined : principal.user.tenantId
   const url = new URL(request.url, 'http://localhost')
   const segments = url.pathname.split('/').filter(segment => segment.length > 0)

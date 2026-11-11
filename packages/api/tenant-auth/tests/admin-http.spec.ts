@@ -8,6 +8,7 @@ import {
   supportApiResponse,
 } from '../src/admin-http.ts'
 import type {
+  AuditEventInput,
   AuditEventRecord,
   SalesEventRecord,
   SupportRequestInput,
@@ -143,6 +144,7 @@ class FakeStore implements TenantAuthStore {
   supportInputs: SupportRequestInput[] = []
   tenantInputs: Parameters<TenantAuthStore['createTenant']>[0][] = []
   accountInputs: Parameters<TenantAuthStore['createUserInTenant']>[0][] = []
+  audits: AuditEventInput[] = []
   missingTenant = false
   missingAccount = false
   missingSupport = false
@@ -280,7 +282,9 @@ class FakeStore implements TenantAuthStore {
     return false
   }
 
-  async recordAuditEvent(): Promise<void> {}
+  async recordAuditEvent(input: AuditEventInput): Promise<void> {
+    this.audits.push(input)
+  }
 
   async listAuditEvents(): Promise<readonly AuditEventRecord[]> {
     return []
@@ -772,6 +776,8 @@ describe('sessions and support inbox', () => {
     expect(revoked.status).toBe(200)
     expect(await revoked.json()).toEqual({ ok: true })
     expect(store.revoked).toEqual(['session-1'])
+    expect(store.audits).toHaveLength(1)
+    expect(store.audits[0]).toMatchObject({ action: 'session.revoke', targetId: 'session-1' })
   })
 
   it('lists the support inbox and applies the status filter', async () => {
