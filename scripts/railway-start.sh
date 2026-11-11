@@ -3,6 +3,20 @@ set -eu
 
 : "${PORT:=8080}"
 
+# Hosted WiseAI deployments opt into the tenant plane explicitly. Keeping the
+# switch opt-in preserves local `dsh web` development while making a Railway
+# misconfiguration fail before the app exposes an owner-only surface.
+if [ "${WISEAI_AUTH_REQUIRED:-0}" = "1" ]; then
+  if [ -z "${DATABASE_URL:-}" ]; then
+    echo 'WISEAI_AUTH_REQUIRED=1 requires DATABASE_URL.' >&2
+    exit 64
+  fi
+  if [ -z "${WISEAI_SESSION_SECRET:-}" ] || [ "${#WISEAI_SESSION_SECRET}" -lt 32 ]; then
+    echo 'WISEAI_AUTH_REQUIRED=1 requires WISEAI_SESSION_SECRET (at least 32 characters).' >&2
+    exit 64
+  fi
+fi
+
 if [ -n "${DSH_WEB_PUBLIC_URL:-}" ]; then
   public_url="$DSH_WEB_PUBLIC_URL"
   trusted_host="${DSH_WEB_TRUSTED_HOST:-}"

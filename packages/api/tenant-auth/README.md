@@ -17,4 +17,4 @@ This package provides the server-side identity seam for a hosted WiseAI deployme
 
 Every authenticated record carries a tenant id. Resolve tenant-owned directories with `tenantRoots(dataRoot, tenantId)` and never accept a tenant id from a browser request. `recordTenantFailure` appends bounded JSONL diagnostics under that tenant's `failures` directory. `retryTransient` is a finite, cancellation-aware retry helper for transient provider calls; it must not wrap non-idempotent mutations.
 
-Run `migrations/001_tenant_auth.sql` against the Railway PostgreSQL `DATABASE_URL` before enabling login. Keep `WISEAI_SESSION_SECRET` and provider keys in Railway variables, never in Git.
+Run `migrations/001_tenant_auth.sql` against the Railway PostgreSQL `DATABASE_URL` before enabling login. Set `WISEAI_AUTH_REQUIRED=1`, `DATABASE_URL`, and a randomly generated `WISEAI_SESSION_SECRET` (at least 32 characters) in Railway variables; the start script refuses to expose the owner-only composition when those required values are missing. Keep secrets and provider keys in Railway variables, never in Git.
