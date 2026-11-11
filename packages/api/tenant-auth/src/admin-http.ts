@@ -10,7 +10,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { hashPassword } from './password.ts'
+import { hashPassword, verifyPassword } from './password.ts'
 import { resolveSession } from './session-tokens.ts'
 import { isSameOriginMutation } from './origin.ts'
 import type {
@@ -290,6 +290,62 @@ async function customerDetail(store: TenantAuthStore, tenantId: string): Promise
   return json({ customer, users, sessions })
 }
 
+async function customerDeletePreview(store: TenantAuthStore, tenantId: string): Promise<Response> {
+  const customer = await store.findTenantById(tenantId)
+  if (customer === null) return notFound()
+  const [users, sessions] = await Promise.all([store.listAccounts(tenantId), store.listSessions({ tenantId })])
+  return json({
+    tenantId,
+    name: customer.name,
+    plan: customer.plan,
+    status: customer.status,
+    users: users.length,
+    sessions: sessions.length,
+    confirmationName: customer.name,
+    requiresReauthentication: true,
+  })
+}
+
+async function customerSoftDelete(
+  store: TenantAuthStore,
+  actor: TenantUserRecord,
+  tenantId: string,
+  request: Request,
+): Promise<Response> {
+  if (tenantId === actor.tenantId) return invalidRequest()
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const password = body.value.password
+  const confirmationName = body.value.confirmationName
+  if (typeof password !== 'string' || password.length === 0 || typeof confirmationName !== 'string') return invalidRequest()
+  const customer = await store.findTenantById(tenantId)
+  if (customer === null) return notFound()
+  const account = await store.findUserById(actor.userId)
+  if (account === null || !(await verifyPassword(password, account.passwordHash))) {
+    return json({ error: 'reauth_failed' }, 403)
+  }
+  if (confirmationName !== customer.name) return json({ error: 'confirmation_mismatch' }, 400)
+  const [users, sessions] = await Promise.all([store.listAccounts(tenantId), store.listSessions({ tenantId })])
+  await store.recordAuditEvent({
+    action: 'customer.soft_delete',
+    actorUserId: actor.userId,
+    actorTenantId: actor.tenantId,
+    targetTenantId: tenantId,
+    targetId: customer.name,
+    details: { users: users.length, sessions: sessions.length, plan: customer.plan, previousStatus: customer.status },
+  })
+  if (!(await store.softDeleteTenant(tenantId))) return notFound()
+  await store.revokeSessions({ tenantId })
+  return json({ ok: true })
+}
+
+async function auditEvents(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
+  const requested = Number(url.searchParams.get('limit') ?? '100')
+  const limit = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, 1000) : 100
+  const events = await store.listAuditEvents(tenantScope === undefined ? { limit } : { tenantId: tenantScope, limit })
+  return json({ events })
+}
+
 async function updateCustomer(store: TenantAuthStore, tenantId: string, request: Request): Promise<Response> {
   const body = await readBody(request)
   if ('response' in body) return body.response
@@ -546,13 +602,15 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
     if (tenantScope !== undefined && tenantId !== tenantScope) return forbidden()
     return addCustomerUser(store, tenantId, request)
   }
+  if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'delete-preview' && method === 'GET') {
+    if (tenantScope !== undefined) return forbidden()
+    return customerDeletePreview(store, decodeURIComponent(rest[0]))
+  }
   if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'delete' && method === 'POST') {
     if (tenantScope !== undefined) return forbidden()
-    const tenantId = decodeURIComponent(rest[0])
-    if (tenantId === principal.user.tenantId) return invalidRequest()
-    const deleted = await store.deleteTenant(tenantId)
-    return deleted ? json({ ok: true }) : notFound()
+    return customerSoftDelete(store, principal.user, decodeURIComponent(rest[0]), request)
   }
+  if (resource === 'audit' && rest.length === 0 && method === 'GET') return auditEvents(store, tenantScope, url)
   if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
     return updateUser(store, principal.user, tenantScope, decodeURIComponent(rest[0]), request)
   }

@@ -8,6 +8,7 @@ import {
   supportApiResponse,
 } from '../src/admin-http.ts'
 import type {
+  AuditEventRecord,
   SalesEventRecord,
   SupportRequestInput,
   SupportRequestPatch,
@@ -273,6 +274,16 @@ class FakeStore implements TenantAuthStore {
 
   async purgeRevokedSessions(): Promise<number> {
     return 0
+  }
+
+  async softDeleteTenant(): Promise<boolean> {
+    return false
+  }
+
+  async recordAuditEvent(): Promise<void> {}
+
+  async listAuditEvents(): Promise<readonly AuditEventRecord[]> {
+    return []
   }
 }
 

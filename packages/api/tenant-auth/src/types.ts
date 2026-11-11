@@ -149,6 +149,24 @@ export interface SalesEventInput {
   readonly status: string | null
 }
 
+/** One appended administrative audit record. */
+export interface AuditEventInput {
+  /** Stable action name such as `customer.delete` or `session.revoke`. */
+  readonly action: string
+  readonly actorUserId: string
+  readonly actorTenantId: string
+  readonly targetTenantId?: string
+  readonly targetId?: string
+  /** Non-secret structured context, for example counts and previous status. */
+  readonly details?: Readonly<Record<string, unknown>>
+}
+
+/** One persisted administrative audit record. */
+export interface AuditEventRecord extends AuditEventInput {
+  readonly eventId: string
+  readonly createdAt: string
+}
+
 /** One Session recorded as owned by a tenant, as persisted. */
 export interface TenantSessionOwnerRecord {
   readonly sessionId: string
@@ -244,6 +262,12 @@ export interface TenantAuthStore {
   listSalesEvents(limit?: number): Promise<readonly SalesEventRecord[]>
   /** Delete one customer tenant; its users, sessions, and support rows cascade. */
   deleteTenant(tenantId: string): Promise<boolean>
+  /** Recoverable deletion: disable the tenant and stamp deleted_at without removing rows. */
+  softDeleteTenant(tenantId: string): Promise<boolean>
+  /** Append one immutable administrative audit record. */
+  recordAuditEvent(input: AuditEventInput): Promise<void>
+  /** Read newest audit records, optionally scoped to one target tenant. */
+  listAuditEvents(filter?: { readonly tenantId?: string; readonly limit?: number }): Promise<readonly AuditEventRecord[]>
   /** Revoke every live login session, optionally for one tenant or account. */
   revokeSessions(filter?: { readonly tenantId?: string; readonly userId?: string }): Promise<number>
   /** Delete revoked login-session rows, optionally for one tenant. */

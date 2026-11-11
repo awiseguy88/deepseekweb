@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  AuditEventInput,
+  AuditEventRecord,
   ClaimSessionOwnerInput,
   ClaimWorkspaceOwnerInput,
   SalesEventInput,
@@ -63,6 +65,17 @@ interface TenantRow extends Record<string, unknown> {
   notes: string
   created_at: Date
   updated_at: Date
+}
+
+interface AuditRow extends Record<string, unknown> {
+  event_id: string
+  actor_user_id: string
+  actor_tenant_id: string
+  action: string
+  target_tenant_id: string | null
+  target_id: string | null
+  details: Readonly<Record<string, unknown>>
+  created_at: Date
 }
 
 interface AccountRow extends Record<string, unknown> {
@@ -303,7 +316,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
          JOIN wiseai_users AS u ON u.user_id = s.user_id AND u.tenant_id = s.tenant_id
          JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
         WHERE s.session_id = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
-          AND NOT u.disabled AND NOT t.disabled
+          AND NOT u.disabled AND NOT t.disabled AND t.deleted_at IS NULL
           AND (
             t.status IN ('active', 'trialing')
             OR (t.status = 'past_due' AND t.access_until IS NOT NULL)
@@ -323,7 +336,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       `INSERT INTO wiseai_sessions (session_id, user_id, tenant_id, expires_at)
        SELECT $1, u.user_id, u.tenant_id, $4::timestamptz
          FROM wiseai_users AS u JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
-        WHERE u.user_id = $2 AND u.tenant_id = $3 AND NOT u.disabled AND NOT t.disabled
+        WHERE u.user_id = $2 AND u.tenant_id = $3 AND NOT u.disabled AND NOT t.disabled AND t.deleted_at IS NULL
           AND (
             t.status IN ('active', 'trialing')
             OR (t.status = 'past_due' AND t.access_until IS NOT NULL)
@@ -383,7 +396,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
 
   async findTenantById(tenantId: string): Promise<TenantRecord | null> {
     const result = await this.db.query<TenantRow>(
-      `SELECT ${TENANT_COLUMNS} FROM wiseai_tenants WHERE tenant_id = $1 LIMIT 1`,
+      `SELECT ${TENANT_COLUMNS} FROM wiseai_tenants WHERE tenant_id = $1 AND deleted_at IS NULL LIMIT 1`,
       [tenantId],
     )
     const row = result.rows[0]
@@ -392,7 +405,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
 
   async listTenants(): Promise<readonly TenantRecord[]> {
     const result = await this.db.query<TenantRow>(
-      `SELECT ${TENANT_COLUMNS} FROM wiseai_tenants ORDER BY created_at DESC, tenant_id`,
+      `SELECT ${TENANT_COLUMNS} FROM wiseai_tenants WHERE deleted_at IS NULL ORDER BY created_at DESC, tenant_id`,
       [],
     )
     return result.rows.map(tenantRecord)
@@ -498,6 +511,63 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       [tenantId],
     )
     return result.rows.length > 0
+  }
+
+  async softDeleteTenant(tenantId: string): Promise<boolean> {
+    const result = await this.db.query<{ tenant_id: string }>(
+      `UPDATE wiseai_tenants
+          SET disabled = true, deleted_at = now(), updated_at = now()
+        WHERE tenant_id = $1 AND deleted_at IS NULL
+        RETURNING tenant_id`,
+      [tenantId],
+    )
+    return result.rows.length > 0
+  }
+
+  async recordAuditEvent(input: AuditEventInput): Promise<void> {
+    await this.db.query(
+      `INSERT INTO wiseai_audit_events
+         (event_id, actor_user_id, actor_tenant_id, action, target_tenant_id, target_id, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+      [
+        randomUUID(),
+        input.actorUserId,
+        input.actorTenantId,
+        input.action,
+        input.targetTenantId ?? null,
+        input.targetId ?? null,
+        JSON.stringify(input.details ?? {}),
+      ],
+    )
+  }
+
+  async listAuditEvents(filter: { readonly tenantId?: string; readonly limit?: number } = {}): Promise<readonly AuditEventRecord[]> {
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 1000)
+    const conditions: string[] = []
+    const parameters: unknown[] = []
+    if (filter.tenantId !== undefined) {
+      parameters.push(filter.tenantId)
+      conditions.push(`target_tenant_id = $${parameters.length}`)
+    }
+    parameters.push(limit)
+    const result = await this.db.query<AuditRow>(
+      `SELECT event_id, actor_user_id, actor_tenant_id, action, target_tenant_id, target_id, details, created_at
+         FROM wiseai_audit_events
+         ${conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`}
+        ORDER BY created_at DESC, event_id DESC
+        LIMIT $${parameters.length}`,
+      parameters,
+    )
+    return result.rows.map(row => ({
+      eventId: row.event_id,
+      actorUserId: row.actor_user_id,
+      actorTenantId: row.actor_tenant_id,
+      action: row.action,
+      ...row.target_tenant_id === null ? {} : { targetTenantId: row.target_tenant_id },
+      ...row.target_id === null ? {} : { targetId: row.target_id },
+      details: row.details,
+      createdAt: row.created_at.toISOString(),
+    }))
   }
 
   async revokeSessions(filter: { readonly tenantId?: string; readonly userId?: string } = {}): Promise<number> {

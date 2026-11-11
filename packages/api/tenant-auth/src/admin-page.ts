@@ -256,7 +256,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
         <label class="field"><span>Access until</span><input id="customer-profile-access" type="datetime-local"><span class="field-hint">Empty means no expiry.</span></label>
         <label class="field field-wide"><span>Notes</span><textarea id="customer-profile-notes" rows="3"></textarea></label>
         <p class="mono small muted field-wide" id="customer-profile-meta"></p>
-        <div class="form-actions field-wide"><button type="submit" class="btn primary" id="customer-profile-submit">Save profile</button><button type="button" class="btn danger" id="customer-delete">Delete customer</button></div>
+        <div class="form-actions field-wide"><button type="submit" class="btn primary" id="customer-profile-submit">Save profile</button><button type="button" class="btn danger" id="customer-delete">Disable customer</button></div>
       </form>
     </section>
     <section class="detail-section" aria-labelledby="customer-users-title">
@@ -1058,13 +1058,27 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
   function deleteCustomer() {
     var tenantId = state.customerTenant;
     if (!tenantId) return;
-    if (!window.confirm('Delete this customer? Its accounts, login sessions, and support requests are removed.')) return;
-    api('/admin/api/customers/' + encodeURIComponent(tenantId) + '/delete', { method: 'POST' }).then(function () {
-      toast('Customer deleted.', 'ok');
-      closeDialog('customer-dialog');
-      loadCustomers();
+    api('/admin/api/customers/' + encodeURIComponent(tenantId) + '/delete-preview').then(function (preview) {
+      var typed = window.prompt('Disable this customer? Its accounts and sign-ins stop working immediately; rows are retained for recovery.\n\nType the customer name to confirm: "' + preview.confirmationName + '"', '');
+      if (typed === null) return;
+      if (typed !== preview.confirmationName) {
+        toast('Not disabled: name did not match.', 'error');
+        return;
+      }
+      var password = window.prompt('Re-enter your administrator password to confirm:');
+      if (!password) return;
+      api('/admin/api/customers/' + encodeURIComponent(tenantId) + '/delete', {
+        method: 'POST',
+        body: { password: password, confirmationName: typed },
+      }).then(function () {
+        toast('Customer disabled and retained for recovery.', 'ok');
+        closeDialog('customer-dialog');
+        loadCustomers();
+      }).catch(function (error) {
+        toast('Could not disable customer: ' + error.message, 'error');
+      });
     }).catch(function (error) {
-      toast('Could not delete customer: ' + error.message, 'error');
+      toast('Could not prepare deletion: ' + error.message, 'error');
     });
   }
 
