@@ -214,6 +214,14 @@ export interface HostConnectionHandle {
   /** Register a database-validated tenant session token as its isolated Peer. */
   registerTenantSession(token: string, principal: Extract<Principal, { readonly kind: 'tenant' }>): () => Promise<void>
 
+  /**
+   * Register a platform operator's sign-in as the owner Peer, so the operator
+   * keeps the main harness workspace while ordinary tenants stay scoped.
+   * @param token - database-validated session token.
+   * @returns disposer retiring the Peer.
+   */
+  registerOwnerSession(token: string): () => Promise<void>
+
   /** Retire the tenant Peer bound to a session token. */
   unregisterTenantSession(token: string): Promise<void>
 

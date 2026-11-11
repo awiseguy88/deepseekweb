@@ -308,7 +308,11 @@ async function route(
     return
   }
   await handleNodeAuthRequest(store, request, response, {
-    register: (token, principal) => connection.registerTenantSession(token, principal),
+    // A platform operator keeps the main harness: the sign-in becomes the owner
+    // Peer. Ordinary accounts stay scoped by the tenant access policy.
+    register: (token, principal) => principal.platformAdmin === true
+      ? connection.registerOwnerSession(token)
+      : connection.registerTenantSession(token, principal),
     unregister: token => connection.unregisterTenantSession(token),
   })
 }

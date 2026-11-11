@@ -5,7 +5,7 @@ import type { TenantAuthStore } from './types.ts'
 
 /** Host callback used to bind a validated session to its isolated Peer. */
 export interface TenantSessionRegistrar {
-  register(token: string, principal: { readonly kind: 'tenant'; readonly tenantId: string; readonly userId: string; readonly role: 'admin' | 'member' }): Promise<(() => Promise<void>) | void> | (() => Promise<void>) | void
+  register(token: string, principal: { readonly kind: 'tenant'; readonly tenantId: string; readonly userId: string; readonly role: 'admin' | 'member'; readonly platformAdmin?: boolean }): Promise<(() => Promise<void>) | void> | (() => Promise<void>) | void
   unregister?(token: string): Promise<void> | void
 }
 
@@ -70,7 +70,13 @@ async function handle(store: TenantAuthStore, request: Request, registrar?: Tena
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000)
     const token = await issueSession(store, user, expiresAt)
     try {
-      await registrar?.register(token, { kind: 'tenant', tenantId: user.tenantId, userId: user.userId, role: user.role })
+      await registrar?.register(token, {
+        kind: 'tenant',
+        tenantId: user.tenantId,
+        userId: user.userId,
+        role: user.role,
+        ...user.platformAdmin ? { platformAdmin: true } : {},
+      })
     } catch (error) {
       await logoutSession(store, token)
       throw error

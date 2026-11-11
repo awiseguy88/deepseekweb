@@ -40,7 +40,14 @@ const TENANT_COOKIE = 'wiseai_session'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface PrincipalMap {
-    tenant: { readonly kind: 'tenant'; readonly tenantId: string; readonly userId: string; readonly role: 'admin' | 'member' }
+    tenant: {
+      readonly kind: 'tenant'
+      readonly tenantId: string
+      readonly userId: string
+      readonly role: 'admin' | 'member'
+      /** Platform operator: a sign-in is admitted with the owner's harness access. */
+      readonly platformAdmin?: boolean
+    }
   }
 }
 
@@ -169,6 +176,27 @@ export class HostConnectionService extends Service implements HostConnectionHand
     const existing = this.tenantPeers.get(token)
     if (existing !== undefined) void existing.peer.dispose()
     const peer = new Peer(this.owner, { principal })
+    this.tenantPeers.set(token, { peer, ownsSocket: false })
+    return async () => {
+      const current = this.tenantPeers.get(token)
+      if (current?.peer !== peer) return
+      this.tenantPeers.delete(token)
+      await peer.dispose()
+    }
+  }
+
+  /**
+   * Register a platform operator's database-validated sign-in as the owner
+   * Peer: the operator keeps the main harness workspace and every Session,
+   * while ordinary tenants stay scoped by the tenant access policy.
+   * @param token - opaque session token already validated against the store.
+   * @returns disposer retiring the Peer.
+   */
+  registerOwnerSession(token: string): () => Promise<void> {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Invalid owner session token')
+    const existing = this.tenantPeers.get(token)
+    if (existing !== undefined) void existing.peer.dispose()
+    const peer = new Peer(this.owner, { principal: { kind: 'owner' } })
     this.tenantPeers.set(token, { peer, ownsSocket: false })
     return async () => {
       const current = this.tenantPeers.get(token)
