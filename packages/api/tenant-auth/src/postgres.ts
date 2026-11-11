@@ -41,6 +41,18 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return { userId, tenantId }
   }
 
+  async createAdmin(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }> {
+    const userId = randomUUID()
+    const tenantId = randomUUID()
+    await this.db.query(
+      `WITH tenant AS (INSERT INTO wiseai_tenants (tenant_id) VALUES ($1) RETURNING tenant_id)
+       INSERT INTO wiseai_users (user_id, tenant_id, email, password_hash, role)
+       SELECT $2, tenant_id, $3, $4, 'admin' FROM tenant`,
+      [tenantId, userId, email.trim(), passwordHash],
+    )
+    return { userId, tenantId }
+  }
+
   async findUserByEmail(email: string): Promise<TenantUserRecord | null> {
     const result = await this.db.query<UserRow>(
       'SELECT user_id, email, password_hash, role, tenant_id, disabled FROM wiseai_users WHERE lower(email) = lower($1) LIMIT 1',

@@ -29,6 +29,7 @@ export interface TenantRoots {
 /** Minimal persistence seam for a future Postgres-backed implementation. */
 export interface TenantAuthStore {
   createMember(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }>
+  createAdmin(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }>
   findUserByEmail(email: string): Promise<TenantUserRecord | null>
   findUserById(userId: string): Promise<TenantUserRecord | null>
   findSession(sessionId: string): Promise<TenantSessionRecord | null>
