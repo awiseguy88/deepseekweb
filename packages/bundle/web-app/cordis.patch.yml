@@ -160,7 +160,7 @@
             url: https://mcp.maton.ai
             headers:
               Authorization: 'Bearer ${credential:MATON_API_KEY}'
-            enabled: false
+            enabled: !!js Boolean(process.env.MATON_API_KEY)
 
     # Workspace commands and reconnect-safe projection over Typert Remote.
     - id: workspace-controller
