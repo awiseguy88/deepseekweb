@@ -38,6 +38,25 @@ function json(response: ServerResponse, status: number, value: unknown): void {
   response.end(JSON.stringify(value))
 }
 
+/**
+ * Delete customer tenants that exist only for deployment verification (every
+ * account on the `@wiseai.example` test domain), so the hosted admin dashboard
+ * reports real accounts instead of probe data.
+ * @param store - tenant identity store.
+ * @returns when the verification tenants are gone or the scan failed.
+ */
+async function purgeVerificationTenants(store: TenantAuthStore): Promise<void> {
+  const tenants = await store.listTenants()
+  for (const tenant of tenants) {
+    const accounts = await store.listAccounts(tenant.tenantId)
+    if (accounts.length === 0) continue
+    if (!accounts.every(account => account.email.toLowerCase().endsWith('@wiseai.example'))) continue
+    if (await store.deleteTenant(tenant.tenantId)) {
+      console.log(`[wiseai-tenant-auth] removed verification tenant ${tenant.tenantId}`)
+    }
+  }
+}
+
 /** Version 4 plugin body: authentication, member support intake, admin UI/API, and Stripe. */
 export function apply(ctx: Context, config: Config): void {
   const { webServer, connection } = ctx
@@ -52,6 +71,14 @@ export function apply(ctx: Context, config: Config): void {
   const migration = database.migrate().catch((error: unknown) => {
     console.error('[wiseai-tenant-auth] schema migration failed:', error)
   })
+  // Probe tenants from deployment verification hold no customer data; drop
+  // them after the schema settles so dashboards count real accounts.
+  ctx.effect(() => {
+    const cleanup = migration.then(() => purgeVerificationTenants(store)).catch((error: unknown) => {
+      console.error('[wiseai-tenant-auth] verification tenant cleanup failed:', error)
+    })
+    return () => { void cleanup }
+  }, 'wiseai-tenant-auth: verification cleanup')
   // The tenant access policy is inert until the Gateway and Typert services it
   // reads are mounted; start() also publishes the ownership services the
   // Session and Workspace controllers claim through. Start after the schema
