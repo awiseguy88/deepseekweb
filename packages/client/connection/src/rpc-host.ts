@@ -169,6 +169,14 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
   }
 
+  /** Retire the isolated Peer bound to one validated tenant session token. */
+  async unregisterTenantSession(token: string): Promise<void> {
+    const record = this.tenantPeers.get(token)
+    if (record === undefined) return
+    this.tenantPeers.delete(token)
+    await record.peer.dispose()
+  }
+
   /** Create one in-process Peer owned by the Context that read this service. */
   createPeer(options: { readonly principal: Principal; readonly interactions?: ConnectionInteractions }): PeerScope {
     return new Peer(this.ctx, options)

@@ -2,6 +2,12 @@ import { hashPassword, verifyPassword } from './password.ts'
 import { issueSession, logoutSession, resolveSession } from './session-tokens.ts'
 import type { TenantAuthStore } from './types.ts'
 
+/** Host callback used to bind a validated session to its isolated Peer. */
+export interface TenantSessionRegistrar {
+  register(token: string, principal: { readonly kind: 'tenant'; readonly tenantId: string; readonly userId: string; readonly role: 'admin' | 'member' }): Promise<(() => Promise<void>) | void> | (() => Promise<void>) | void
+  unregister?(token: string): Promise<void> | void
+}
+
 const COOKIE = 'wiseai_session'
 const SESSION_DAYS = 14
 
@@ -15,11 +21,11 @@ function json(value: unknown, init: ResponseInit = {}): Response {
 }
 
 /** HTTP auth surface for composition into a host WebServer route. */
-export function tenantAuthHandler(store: TenantAuthStore, request: Request): Promise<Response> {
-  return handle(store, request)
+export function tenantAuthHandler(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar): Promise<Response> {
+  return handle(store, request, registrar)
 }
 
-async function handle(store: TenantAuthStore, request: Request): Promise<Response> {
+async function handle(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar): Promise<Response> {
   const path = new URL(request.url).pathname
   if (path === '/auth/login' && request.method === 'POST') {
     const body = await request.json().catch(() => null) as { email?: unknown; password?: unknown } | null
@@ -28,6 +34,12 @@ async function handle(store: TenantAuthStore, request: Request): Promise<Respons
     if (user === null || user.disabled || !(await verifyPassword(body.password, user.passwordHash))) return json({ error: 'invalid_credentials' }, { status: 401 })
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000)
     const token = await issueSession(store, user, expiresAt)
+    try {
+      await registrar?.register(token, { kind: 'tenant', tenantId: user.tenantId, userId: user.userId, role: user.role })
+    } catch (error) {
+      await logoutSession(store, token)
+      throw error
+    }
     const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : ''
     return json({ user: { userId: user.userId, email: user.email, role: user.role, tenantId: user.tenantId } }, {
       headers: { 'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${SESSION_DAYS * 86_400}` },
@@ -37,6 +49,7 @@ async function handle(store: TenantAuthStore, request: Request): Promise<Respons
   const session = token === undefined ? null : await resolveSession(store, token)
   if (path === '/auth/logout' && request.method === 'POST') {
     if (token !== undefined) await logoutSession(store, token)
+    if (token !== undefined) await registrar?.unregister?.(token)
     return json({ ok: true }, { headers: { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` } })
   }
   if (path === '/auth/me' && request.method === 'GET') return session === null ? json({ user: null }, { status: 401 }) : json(session)

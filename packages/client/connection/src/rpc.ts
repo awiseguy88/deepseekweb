@@ -214,6 +214,9 @@ export interface HostConnectionHandle {
   /** Register a database-validated tenant session token as its isolated Peer. */
   registerTenantSession(token: string, principal: Extract<Principal, { readonly kind: 'tenant' }>): () => Promise<void>
 
+  /** Retire the tenant Peer bound to a session token. */
+  unregisterTenantSession(token: string): Promise<void>
+
   /**
    * Whether this deployment accepts authorities beyond loopback: true only
    * when a validated `trustedHosts` entry names a non-loopback hostname.

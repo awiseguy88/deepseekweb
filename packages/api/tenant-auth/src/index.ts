@@ -6,5 +6,6 @@ export { issueSession, resolveSession, logoutSession } from './session-tokens.ts
 export { recordTenantFailure, retryTransient } from './failure-log.ts'
 export type { RetryPolicy, TenantFailureRecord } from './failure-log.ts'
 export { tenantAuthHandler } from './http.ts'
+export type { TenantSessionRegistrar } from './http.ts'
 export { PostgresTenantAuthStore } from './postgres.ts'
 export type { TenantAuthDatabase } from './postgres.ts'
