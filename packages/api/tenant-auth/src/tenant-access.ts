@@ -159,6 +159,12 @@ export interface TenantAccessOptions {
   readonly ctx: Context
   /** The identity store; it must also implement {@link TenantOwnershipStore}. */
   readonly store: TenantAuthStore
+  /**
+   * Explicit Remote/event action allowlist (`namespace/method`, `namespace/*`,
+   * or `*`). Defaults to the hosted customer surface; setting this is the
+   * deployment's capability policy, and unmatched endpoints stay denied.
+   */
+  readonly allowedActions?: readonly string[]
 }
 
 /** Tenant ownership services plus their registration lifecycle. */
@@ -173,6 +179,41 @@ export interface TenantAccess {
   dispose(): void
 }
 
+/**
+ * Capabilities a hosted tenant peer receives by default: the Remote namespaces
+ * the customer web client needs. Any endpoint outside these patterns is denied,
+ * so a newly mounted backend plugin cannot widen customer permissions until an
+ * operator adds its namespace (WISEAI_TENANT_ACTIONS overrides this list).
+ */
+const DEFAULT_TENANT_ACTIONS: readonly string[] = [
+  'account/*',
+  'credentials/*',
+  'directoryPicker/*',
+  'event:api-session/*',
+  'fileReferences/*',
+  'job/*',
+  'pluginInventory/list',
+  'session/*',
+  'settings/*',
+  'skills/*',
+  'terminal/*',
+  'workspace/*',
+]
+
+/** Whether one discovered action matches an explicit allowlist pattern (`*` suffix or `*`). */
+function matchesAction(action: string, pattern: string): boolean {
+  if (pattern === '*') return true
+  if (pattern.endsWith('*')) return action.startsWith(pattern.slice(0, -1))
+  return action === pattern
+}
+
+/** Resolve the configured allowlist from options or the deployment environment. */
+function configuredActions(options: TenantAccessOptions): readonly string[] {
+  if (options.allowedActions !== undefined) return options.allowedActions
+  const configured = process.env.WISEAI_TENANT_ACTIONS?.trim()
+  if (configured === undefined || configured.length === 0) return DEFAULT_TENANT_ACTIONS
+  return configured.split(',').map(pattern => pattern.trim()).filter(pattern => pattern.length > 0)
+}
 /** The Session notifications the Gateway forwards to tenant Peers that hold the Session. */
 const FORWARDED_EVENT_ACTIONS: readonly TenantAccessAction[] = [
   'event:api-session/activity',
@@ -225,13 +266,14 @@ function endpointOf(descriptor: TenantAccessRemoteDescriptor): TenantAccessActio
  * @param runtime - the Host Typert runtime.
  * @returns the current actions.
  */
-function currentActions(runtime: TenantAccessRuntime): readonly TenantAccessAction[] {
+function currentActions(runtime: TenantAccessRuntime, allowed: readonly string[]): readonly TenantAccessAction[] {
   const endpoints = new Map<string, TenantAccessAction>()
   for (const registry of [runtime.local, runtime.remotes]) {
     if (registry === undefined) continue
     for (const descriptor of registry.list()) endpoints.set(`${descriptor.namespace}/${descriptor.method}`, endpointOf(descriptor))
   }
-  return [...endpoints.values(), ...FORWARDED_EVENT_ACTIONS]
+  const discovered = [...endpoints.values(), ...FORWARDED_EVENT_ACTIONS]
+  return discovered.filter(action => allowed.some(pattern => matchesAction(action, pattern)))
 }
 
 /**
@@ -248,6 +290,7 @@ function currentActions(runtime: TenantAccessRuntime): readonly TenantAccessActi
  */
 export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
   const { ctx, store } = options
+  const allowedActions = configuredActions(options)
   if (!isOwnershipStore(store)) {
     throw new Error('tenant access: the configured store does not persist Session and Workspace ownership')
   }
@@ -343,7 +386,7 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
     const runtime = readService(ctx, 'typert') as TenantAccessRuntime
     registrar = readService(ctx, 'remoteAccess') as TenantAccessRegistrar
     const refresh = (): void => {
-      actions = currentActions(runtime)
+      actions = currentActions(runtime, allowedActions)
       registrar?.invalidate()
     }
     const stops: Array<() => void | Promise<void>> = []
@@ -354,8 +397,16 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
     unsubscribe = () => {
       for (const stop of stops) void stop()
     }
-    actions = currentActions(runtime)
+    actions = currentActions(runtime, allowedActions)
     removePolicy = registrar.registerPolicy('tenant', policy)
+    // Report the denied surface once per boot so an operator can spot a newly
+    // mounted plugin that needs an allowlist entry instead of silent denials.
+    const denied = [...(runtime.local?.list() ?? []), ...(runtime.remotes?.list() ?? [])]
+      .map(descriptor => `${descriptor.namespace}/${descriptor.method}`)
+      .filter(action => !allowedActions.some(pattern => matchesAction(action, pattern)))
+    if (denied.length > 0) {
+      console.warn(`[wiseai-tenant-auth] tenant capability policy denies ${denied.length} endpoint(s): ${denied.join(', ')}`)
+    }
     // The controllers read the ownership services by name, so this factory is
     // also their provider; providing through the fiber disposes them with the
     // composition as well as through dispose().

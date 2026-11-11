@@ -123,7 +123,7 @@ afterEach(async () => {
 })
 
 /** A Host Context with the two fake services and a prepared store. */
-function fixture(seed: (store: FakeStore) => void = () => {}): Fixture {
+function fixture(seed: (store: FakeStore) => void = () => {}, allowedActions?: readonly string[]): Fixture {
   const ctx = new Context()
   roots.push(ctx)
   const remote = new FakeRemoteAccess()
@@ -133,13 +133,13 @@ function fixture(seed: (store: FakeStore) => void = () => {}): Fixture {
   ctx.provide('typert', typert as never)
   const store = new FakeStore()
   seed(store)
-  const access = createTenantAccess({ ctx, store: store as never })
+  const access = createTenantAccess({ ctx, store: store as never, ...allowedActions === undefined ? {} : { allowedActions } })
   return { ctx, access, remote, typert, store }
 }
 
 /** Starting fixture: the access service has hydrated and registered its policy. */
-async function started(seed: (store: FakeStore) => void = () => {}): Promise<Fixture> {
-  const f = fixture(seed)
+async function started(seed: (store: FakeStore) => void = () => {}, allowedActions?: readonly string[]): Promise<Fixture> {
+  const f = fixture(seed, allowedActions)
   await f.access.start()
   return f
 }
@@ -302,6 +302,23 @@ describe('tenant policy bindings and actions', () => {
 
     expect(bindingOf(bindings, 'session').role.actions).toEqual(actions)
     expect(bindingOf(bindings, 'workspace').role.actions).toEqual(actions)
+  })
+
+  it('denies endpoints outside the explicit capability allowlist, including later contributions', async () => {
+    const f = await started(undefined, ['session/list', 'event:api-session/activity'])
+    expect(bindingOf(f.remote.bindingsFor(TENANT_A), 'global').role.actions).toEqual([
+      'session/list', 'event:api-session/activity',
+    ])
+
+    f.typert.publish([{ namespace: 'secret', method: 'leak' }])
+    expect(bindingOf(f.remote.bindingsFor(TENANT_A), 'global').role.actions).not.toContain('secret/leak')
+  })
+
+  it('supports exact endpoints and namespace wildcards in the allowlist', async () => {
+    const f = await started(undefined, ['session/*', 'event:api-session/status'])
+    expect(bindingOf(f.remote.bindingsFor(TENANT_A), 'global').role.actions).toEqual([
+      'session/list', 'session/events', 'event:api-session/status',
+    ])
   })
 
   it('refreshes the cached action array when Remote contributions change', async () => {
