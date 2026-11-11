@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyTenantAuthMigrations, type TenantAuthDatabase } from '../src/schema.ts'
+import { applyTenantAuthMigrations } from '../src/schema.ts'
+import type { TenantAuthDatabase } from '../src/postgres.ts'
 
 /** Records every statement the loader executes. */
 class RecordingDatabase implements TenantAuthDatabase {
