@@ -53,6 +53,18 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     }
   }
 
+  async findUserById(userId: string): Promise<TenantUserRecord | null> {
+    const result = await this.db.query<UserRow>(
+      'SELECT user_id, email, password_hash, role, tenant_id, disabled FROM wiseai_users WHERE user_id = $1 LIMIT 1',
+      [userId],
+    )
+    const row = result.rows[0]
+    return row === undefined ? null : {
+      userId: row.user_id, email: row.email, passwordHash: row.password_hash,
+      role: row.role, tenantId: row.tenant_id, disabled: row.disabled,
+    }
+  }
+
   async findSession(sessionId: string): Promise<TenantSessionRecord | null> {
     const result = await this.db.query<SessionRow>(
       `SELECT s.session_id, s.user_id, s.tenant_id, s.expires_at, s.revoked_at

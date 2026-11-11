@@ -30,6 +30,7 @@ export interface TenantRoots {
 export interface TenantAuthStore {
   createMember(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }>
   findUserByEmail(email: string): Promise<TenantUserRecord | null>
+  findUserById(userId: string): Promise<TenantUserRecord | null>
   findSession(sessionId: string): Promise<TenantSessionRecord | null>
   createSession(input: Omit<TenantSessionRecord, 'revokedAt'>): Promise<TenantSessionRecord>
   revokeSession(sessionId: string): Promise<void>

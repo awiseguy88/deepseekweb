@@ -36,6 +36,13 @@ import type {
 const INVALID_REQUEST_RPC_ID = RpcId('invalid-request')
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
+const TENANT_COOKIE = 'wiseai_session'
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface PrincipalMap {
+    tenant: { readonly kind: 'tenant'; readonly tenantId: string; readonly userId: string; readonly role: 'admin' | 'member' }
+  }
+}
 
 interface PeerRecord {
   readonly peer: Peer
@@ -71,6 +78,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
   /** The Peer every authenticated browser connection shares. */
   readonly browserPeer: PeerScope
   private readonly peers = new Map<PeerId, PeerRecord>()
+  private readonly tenantPeers = new Map<string, PeerRecord>()
   private readonly owner: Context
   private disposed = false
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
@@ -94,8 +102,9 @@ export class HostConnectionService extends Service implements HostConnectionHand
     this.browserPeer = new Peer(ctx, { principal: { kind: 'owner' } })
     ctx.effect(() => async () => {
       this.disposed = true
-      const peers = [this.browserPeer, ...Array.from(this.peers.values(), record => record.peer)]
+      const peers = [this.browserPeer, ...Array.from(this.peers.values(), record => record.peer), ...Array.from(this.tenantPeers.values(), record => record.peer)]
       this.peers.clear()
+      this.tenantPeers.clear()
       await Promise.all(peers.map(peer => peer.dispose()))
     }, 'client-connection: Peer scopes')
     this.allowsRemoteAuthorities = trustedHosts.some(isRemoteAuthority)
@@ -131,9 +140,33 @@ export class HostConnectionService extends Service implements HostConnectionHand
     if (this.disposed) return { rejection: 401 }
     const secure = this.owner.get('webServer')?.protocol === 'https:'
     if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
+    const tenantToken = readTenantCookie(request.headers)
+    if (tenantToken !== undefined) {
+      const tenant = this.tenantPeers.get(tenantToken)
+      if (tenant !== undefined) return { peer: tenant.peer }
+    }
     const id = this.browserAuth.authenticateApi(request, secure)
     const record = id === undefined ? undefined : this.peers.get(id)
     return record === undefined ? { rejection: 401 } : { peer: record.peer }
+  }
+
+  /**
+   * Register an already database-validated WiseAI session token as its isolated
+   * Peer. The auth route must call this only after resolving the token against
+   * the tenant store; this method intentionally does not perform database I/O.
+   */
+  registerTenantSession(token: string, principal: Extract<Principal, { readonly kind: 'tenant' }>): () => Promise<void> {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Invalid tenant session token')
+    const existing = this.tenantPeers.get(token)
+    if (existing !== undefined) void existing.peer.dispose()
+    const peer = new Peer(this.owner, { principal })
+    this.tenantPeers.set(token, { peer, ownsSocket: false })
+    return async () => {
+      const current = this.tenantPeers.get(token)
+      if (current?.peer !== peer) return
+      this.tenantPeers.delete(token)
+      await peer.dispose()
+    }
   }
 
   /** Create one in-process Peer owned by the Context that read this service. */
@@ -298,6 +331,19 @@ export class HostConnectionService extends Service implements HostConnectionHand
         this.interceptors.delete(channel)
       }
     }, `client-connection: ${channel} rpc interceptor`)
+  }
+}
+
+function readTenantCookie(headers: ConnectionTrustRequest['headers']): string | undefined {
+  const raw = headers instanceof Headers ? headers.get('cookie') : headers.cookie
+  const value = Array.isArray(raw) ? raw.join(';') : raw
+  const item = value?.split(';').map(part => part.trim()).find(part => part.startsWith(`${TENANT_COOKIE}=`))
+  if (item === undefined) return undefined
+  try {
+    const token = decodeURIComponent(item.slice(TENANT_COOKIE.length + 1))
+    return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : undefined
+  } catch {
+    return undefined
   }
 }
 
