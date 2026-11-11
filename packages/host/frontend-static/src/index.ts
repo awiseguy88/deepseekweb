@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -92,8 +93,8 @@ function bytesBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
  */
 async function serveStatic(
   request: Request, distRoot: string, distIndex: string,
-  authorizeIndex: () => Response | undefined,
-  renderIndex: (html: string) => string,
+  authorizeIndex: () => Response | PeerScope | undefined,
+  renderIndex: (html: string, admittedPeer?: PeerScope) => string,
 ): Promise<Response> {
   const target = resolve(normalize(join(distRoot, decodeURIComponent(new URL(request.url).pathname))))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
@@ -104,9 +105,10 @@ async function serveStatic(
   let headers: Record<string, string>
   try {
     if (target === distRoot || target === distIndex) {
-      const refusal = authorizeIndex()
-      if (refusal !== undefined) return refusal
-      body = renderIndex(await readFile(distIndex, 'utf8'))
+      const admission = authorizeIndex()
+      if (admission instanceof Response) return admission
+      const admittedPeer = admission
+      body = renderIndex(await readFile(distIndex, 'utf8'), admittedPeer)
       headers = { 'content-type': HTML_MIME }
     } else {
       body = await readFile(target)
@@ -136,10 +138,12 @@ export function apply(ctx: Context, config: Config): void {
   // Connection's browser authentication writes the token exchange's 303 or
   // the 401 through a writeHead/end response; capture it as a Fetch response.
   // The answer stays a 401 unless Connection writes another one.
-  const authorizeIndex = (request: Request): Response | undefined => {
+  const authorizeIndex = (request: Request): Response | PeerScope | undefined => {
     let status = 401
     let headers = new Headers()
     let body: string | undefined
+    const admittedPeer = ctx.connection.peerForIndex(request)
+    if (admittedPeer !== undefined) return admittedPeer
     const admitted = ctx.connection.authorizeIndex(request, {
       writeHead(nextStatus, nextHeaders) {
         status = nextStatus
@@ -157,10 +161,10 @@ export function apply(ctx: Context, config: Config): void {
       // A read with a Peer was admitted by its caller; an HTTP request carries
       // none and passes Connection's browser authentication instead.
       () => peer === undefined ? authorizeIndex(request) : undefined,
-      // The browser authentication admits the owner's shared browser Peer. The
+      // The browser authentication admits the owner's or tenant's Peer. The
       // base goes in after all index transforms, so it precedes every resource
       // reference they insert.
-      html => ctx.webServer.renderIndex(html, peer ?? ctx.connection.browserPeer)
+      (html, admittedPeer) => ctx.webServer.renderIndex(html, peer ?? admittedPeer ?? ctx.connection.browserPeer)
         .replace(/<head(?:\s[^>]*)?>/i, open => `${open}<base href="./">`),
     ),
   }), 'frontend-static: fallback seat')

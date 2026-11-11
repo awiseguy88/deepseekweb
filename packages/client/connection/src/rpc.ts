@@ -217,6 +217,9 @@ export interface HostConnectionHandle {
   /** Retire the tenant Peer bound to a session token. */
   unregisterTenantSession(token: string): Promise<void>
 
+  /** Resolve the Peer represented by an authenticated index request. */
+  peerForIndex(request: ConnectionIndexRequest): PeerScope | undefined
+
   /**
    * Whether this deployment accepts authorities beyond loopback: true only
    * when a validated `trustedHosts` entry names a non-loopback hostname.

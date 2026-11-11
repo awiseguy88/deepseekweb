@@ -232,7 +232,17 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * Authenticate an index request; native TLS listeners mint Secure cookies.
    */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
+    const peer = this.peerForIndex(request)
+    if (peer !== undefined) return true
     return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')
+  }
+
+  /** Resolve the Peer represented by an already-authenticated index request. */
+  peerForIndex(request: ConnectionIndexRequest): PeerScope | undefined {
+    const secure = this.ctx.get('webServer')?.protocol === 'https:'
+    if (this.browserAuth.isAuthenticated(request, secure)) return this.browserPeer
+    const token = readTenantCookie(request.headers)
+    return token === undefined ? undefined : this.tenantPeers.get(token)?.peer
   }
 
   /** Add this process's launch token to the clean application URL. */
