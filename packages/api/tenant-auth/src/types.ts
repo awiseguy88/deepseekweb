@@ -28,10 +28,13 @@ export interface TenantRoots {
 
 /** Minimal persistence seam for a future Postgres-backed implementation. */
 export interface TenantAuthStore {
+  createMember(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }>
   findUserByEmail(email: string): Promise<TenantUserRecord | null>
   findSession(sessionId: string): Promise<TenantSessionRecord | null>
   createSession(input: Omit<TenantSessionRecord, 'revokedAt'>): Promise<TenantSessionRecord>
   revokeSession(sessionId: string): Promise<void>
+  listUsers(tenantId: string): Promise<readonly TenantUserRecord[]>
+  setUserDisabled(tenantId: string, userId: string, disabled: boolean): Promise<void>
 }
 
 /** Resolve tenant-owned directories from a trusted server-side identity. */

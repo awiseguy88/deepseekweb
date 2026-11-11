@@ -11,3 +11,10 @@ The root layout is:
 ```
 
 This package contains contracts only. It is deliberately not mounted into the Web bundle until the host authentication and Remote principal integration are implemented together.
+# WiseAI tenant authentication
+
+This package provides the server-side identity seam for a hosted WiseAI deployment. Passwords are hashed with Node's built-in Argon2id implementation; browser sessions are opaque random tokens whose SHA-256 digests are stored in PostgreSQL. The `tenantAuthHandler` function is intentionally transport-neutral and can be mounted at `/auth/*` by the host WebServer.
+
+Every authenticated record carries a tenant id. Resolve tenant-owned directories with `tenantRoots(dataRoot, tenantId)` and never accept a tenant id from a browser request. `recordTenantFailure` appends bounded JSONL diagnostics under that tenant's `failures` directory. `retryTransient` is a finite, cancellation-aware retry helper for transient provider calls; it must not wrap non-idempotent mutations.
+
+Run `migrations/001_tenant_auth.sql` against the Railway PostgreSQL `DATABASE_URL` before enabling login. Keep `WISEAI_SESSION_SECRET` and provider keys in Railway variables, never in Git.
