@@ -68,7 +68,9 @@ export function apply(ctx: Context, config: Config): void {
   const bootstrapPassword = process.env.WISEAI_ADMIN_PASSWORD
   // The schema set is idempotent, so every boot converges an existing database
   // and a fresh Railway database to the current columns and tables.
+  let migrationError: unknown
   const migration = database.migrate().catch((error: unknown) => {
+    migrationError = error
     console.error('[wiseai-tenant-auth] schema migration failed:', error)
   })
   // Probe tenants from deployment verification hold no customer data; drop
@@ -148,6 +150,27 @@ export function apply(ctx: Context, config: Config): void {
       path: '/auth',
       handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, store, connection),
     })
+    const disposeHealth = webServer.register({
+      kind: 'exact',
+      path: '/healthz',
+      handler: async (_request: IncomingMessage, response: ServerResponse) => {
+        await migration.catch(() => {})
+        let checks: Awaited<ReturnType<NonNullable<TenantAuthStore['health']>>> | null = null
+        try {
+          checks = store.health === undefined ? null : await store.health()
+        } catch (error) {
+          console.error('[wiseai-tenant-auth] health query failed:', error)
+        }
+        const ok = migrationError === undefined
+          && checks !== null
+          && checks.tenants && checks.deletedAt && checks.auditEvents
+        json(response, ok ? 200 : 503, {
+          ok,
+          migration: migrationError === undefined ? 'applied' : String(migrationError),
+          checks,
+        })
+      },
+    })
     const disposeAdmin = webServer.register({
       kind: 'prefix',
       path: '/admin',
@@ -218,6 +241,7 @@ export function apply(ctx: Context, config: Config): void {
     return async () => {
       disposeLogin()
       dispose()
+      disposeHealth()
       disposeAdmin()
       disposeSupport()
       disposeAccount()
@@ -363,7 +387,7 @@ async function bootstrapAdmin(store: TenantAuthStore, email: string, password: s
   await store.updateTenant(created.tenantId, { name: 'WiseAI Operations' })
 }
 
-const LOGIN_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WiseAI sign in</title><style>body{font:16px system-ui;max-width:26rem;margin:12vh auto;padding:2rem;background:#101116;color:#f5f5f5}form{display:grid;gap:1rem}input,button{font:inherit;padding:.75rem;border-radius:.5rem;border:1px solid #555}button{background:#7c5cff;color:#fff;cursor:pointer}#error{color:#ff8f8f;min-height:1.5em}</style></head><body><h1>Sign in to WiseAI</h1><form id="form"><label>Email<br><input name="email" type="email" autocomplete="username" required></label><label>Password<br><input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div id="error" role="alert"></div></form><script>const form=document.querySelector(\'#form\'),error=document.querySelector(\'#error\');form.addEventListener(\'submit\',async event=>{event.preventDefault();error.textContent=\'\';const body=Object.fromEntries(new FormData(form));const result=await fetch(\'/auth/login\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify(body)});if(result.ok){const next=new URLSearchParams(location.search).get(\'next\');location.href=next&&next.startsWith(\'/\')&&!next.startsWith(\'//\')?next:\'/\'}else error.textContent=\'Unable to sign in with those credentials.\'})</script></body></html>'
+const LOGIN_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WiseAI sign in</title><style>body{font:16px system-ui;max-width:26rem;margin:12vh auto;padding:2rem;background:#101116;color:#f5f5f5}form{display:grid;gap:1rem}input,button{font:inherit;padding:.75rem;border-radius:.5rem;border:1px solid #555}button{background:#7c5cff;color:#fff;cursor:pointer}#error{color:#ff8f8f;min-height:1.5em}</style></head><body><h1>Sign in to WiseAI</h1><form id="form"><label>Email<br><input name="email" type="email" autocomplete="username" required></label><label>Password<br><input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div id="error" role="alert"></div></form><script>const form=document.querySelector(\'#form\'),error=document.querySelector(\'#error\');form.addEventListener(\'submit\',async event=>{event.preventDefault();error.textContent=\'\';const body=Object.fromEntries(new FormData(form));const result=await fetch(\'/auth/login\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify(body)});if(result.ok){const next=new URLSearchParams(location.search).get(\'next\');location.href=next&&next.startsWith(\'/\')&&!next.startsWith(\'//\')?next:\'/\'}else{let detail=\'\';try{const data=await result.json();if(data&&data.error)detail=\' (\'+data.error+\')\'}catch(_){}error.textContent=\'Unable to sign in\'+detail+\'.\'}})</script></body></html>'
 
 async function route(
   request: IncomingMessage,

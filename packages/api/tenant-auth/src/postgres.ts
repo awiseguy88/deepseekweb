@@ -588,6 +588,30 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return result.rows.length
   }
 
+  async health(): Promise<{ tenants: boolean; deletedAt: boolean; auditEvents: boolean; sessionAdmission: boolean }> {
+    const check = async (sql: string, parameters: readonly unknown[] = []): Promise<boolean> => {
+      try {
+        await this.db.query(sql, parameters)
+        return true
+      } catch {
+        return false
+      }
+    }
+    const tenants = await check('SELECT tenant_id FROM wiseai_tenants LIMIT 1')
+    return {
+      tenants,
+      deletedAt: await check('SELECT deleted_at FROM wiseai_tenants LIMIT 1'),
+      auditEvents: await check('SELECT event_id FROM wiseai_audit_events LIMIT 1'),
+      sessionAdmission: await check(
+        `SELECT 1 FROM wiseai_tenants AS t
+          WHERE t.tenant_id IS NULL
+            AND (t.access_until IS NULL OR t.access_until + make_interval(days => $1) > now())
+          LIMIT 0`,
+        [accessGraceDays()],
+      ),
+    }
+  }
+
   async purgeRevokedSessions(filter: { readonly tenantId?: string } = {}): Promise<number> {
     const result = filter.tenantId === undefined
       ? await this.db.query<{ session_id: string }>(

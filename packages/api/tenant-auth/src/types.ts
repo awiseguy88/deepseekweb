@@ -213,6 +213,18 @@ export interface TenantRoots {
   readonly failures: string
 }
 
+/** Database readiness evidence for the hosted health endpoint. */
+export interface TenantStoreHealth {
+  /** The tenant table answers a query. */
+  readonly tenants: boolean
+  /** Migration 004's soft-delete column exists. */
+  readonly deletedAt: boolean
+  /** Migration 004's audit table exists. */
+  readonly auditEvents: boolean
+  /** The session-admission entitlement query binds and executes. */
+  readonly sessionAdmission: boolean
+}
+
 /**
  * Persistence seam for tenant identity plus the hosted-admin extensions.
  * Every method resolves the tenant from a trusted server-side identity; no
@@ -268,6 +280,8 @@ export interface TenantAuthStore {
   recordAuditEvent(input: AuditEventInput): Promise<void>
   /** Read newest audit records, optionally scoped to one target tenant. */
   listAuditEvents(filter?: { readonly tenantId?: string; readonly limit?: number }): Promise<readonly AuditEventRecord[]>
+  /** Report schema readiness without requiring authentication. */
+  health?(): Promise<TenantStoreHealth>
   /** Revoke every live login session, optionally for one tenant or account. */
   revokeSessions(filter?: { readonly tenantId?: string; readonly userId?: string }): Promise<number>
   /** Delete revoked login-session rows, optionally for one tenant. */
