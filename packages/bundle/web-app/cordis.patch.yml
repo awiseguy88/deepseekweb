@@ -252,6 +252,13 @@
     # webserver under /api; browser half is the fetch/SSE client. Every API
     # request and upgrade passes the loopback, listener-bind, or trustedHosts
     # policy; an advertised public URL contributes nothing to it.
+    # Hosted delegation capacity: the base default allows 8 concurrent
+    # subagents; the hosted demo raises it (WISEAI_MAX_ACTIVE_SUBAGENTS overrides).
+    - id: subagent
+      name: '@deepseek-ai/dsh-subagent'
+      config:
+        maxActiveSubagents: !!js Number(process.env.WISEAI_MAX_ACTIVE_SUBAGENTS ?? 32)
+
     # Hosted sessions survive a rebuilt container: a vanished project root
     # recovers to the persistent workspace directory instead of failing turns.
     - id: working-directory
