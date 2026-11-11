@@ -25,6 +25,40 @@ export function tenantAuthHandler(store: TenantAuthStore, request: Request, regi
   return handle(store, request, registrar)
 }
 
+/** Adapt a Node HTTP request for a host route, with a bounded body read. */
+export async function handleNodeAuthRequest(
+  store: TenantAuthStore,
+  request: IncomingMessage,
+  response: ServerResponse,
+  registrar?: TenantSessionRegistrar,
+): Promise<void> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += bytes.length
+    if (size > 1_048_576) {
+      response.writeHead(413, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ error: 'request_too_large' }))
+      return
+    }
+    chunks.push(bytes)
+  }
+  const host = request.headers.host ?? 'localhost'
+  const url = new URL(request.url ?? '/auth', `http://${host}`)
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value)
+  }
+  const result = await tenantAuthHandler(store, new Request(url, {
+    method: request.method,
+    headers,
+    body: chunks.length === 0 ? undefined : Buffer.concat(chunks),
+  }), registrar)
+  response.writeHead(result.status, Object.fromEntries(result.headers.entries()))
+  response.end(Buffer.from(await result.arrayBuffer()))
+}
+
 async function handle(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar): Promise<Response> {
   const path = new URL(request.url).pathname
   if (path === '/auth/login' && request.method === 'POST') {
@@ -75,3 +109,4 @@ async function handle(store: TenantAuthStore, request: Request, registrar?: Tena
   }
   return json({ error: 'not_found' }, { status: 404 })
 }
+import type { IncomingMessage, ServerResponse } from 'node:http'
