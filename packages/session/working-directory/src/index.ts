@@ -51,6 +51,12 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 export interface Config {
   /** Absolute execution-world fallback directory; omitted values use the launch directory. */
   defaultDirectory?: string
+  /**
+   * Hosted recovery policy: when a Session's recorded project directory has
+   * disappeared (for example an ephemeral container root after a redeploy),
+   * recover to {@link defaultDirectory} instead of failing the turn.
+   */
+  recoverToDefault?: boolean
 }
 
 /** One owner for each Session's effective directory and its model-visible changes. */
@@ -59,10 +65,13 @@ export class WorkingDirectoryService extends Service {
 
   static Config: z<Config> = z.object({
     defaultDirectory: z.string(),
+    recoverToDefault: z.boolean().default(false),
   })
 
   /** Absolute deployment fallback for Sessions with no recorded original directory. */
   readonly defaultDirectory: string
+  /** Whether a vanished recorded project recovers to {@link defaultDirectory}. */
+  private readonly recoverToDefault: boolean
   private readonly pending = new WeakMap<Session, Promise<void>>()
   private readonly operations = new Set<Promise<unknown>>()
   private readonly lifecycle = new AbortController()
@@ -74,6 +83,7 @@ export class WorkingDirectoryService extends Service {
     const directory = config.defaultDirectory ?? process.cwd()
     if (!isAbsolute(directory)) throw new Error('working-directory: defaultDirectory must be absolute')
     this.defaultDirectory = directory
+    this.recoverToDefault = config.recoverToDefault ?? false
   }
 
   protected async [Service.init](): Promise<void> {
@@ -145,7 +155,16 @@ export class WorkingDirectoryService extends Service {
         return current
       }
       const original = agent.session.header.cwd ?? this.defaultDirectory
-      const restored = await this.directory(original, original, control)
+      let restored: string
+      try {
+        restored = await this.directory(original, original, control)
+      } catch (error) {
+        // Hosted environments rebuild from a clean container: a project root
+        // under an ephemeral path is gone, so recover to the persistent
+        // default instead of failing every turn of that Session.
+        if (!this.recoverToDefault || original === this.defaultDirectory) throw error
+        restored = await this.directory(this.defaultDirectory, this.defaultDirectory, control)
+      }
       this.commit(agent, restored, true, control)
       return restored
     })

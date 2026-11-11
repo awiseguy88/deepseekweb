@@ -19,6 +19,13 @@ if [ "${WISEAI_AUTH_REQUIRED:-0}" = "1" ]; then
   # the repository at /app, so the default needs no Railway variable.
   : "${WISEAI_LANDING_PAGE:=/app/wiseai-immersive.html}"
   export WISEAI_LANDING_PAGE
+  # Sessions live on the persistent volume; an old session whose container-local
+  # project root vanished recovers to this directory instead of failing.
+  : "${WISEAI_WORKSPACE_ROOT:=/data/workspace}"
+  mkdir -p "$WISEAI_WORKSPACE_ROOT"
+  export WISEAI_WORKSPACE_ROOT
+  : "${WISEAI_RECOVER_MISSING_CWD:=1}"
+  export WISEAI_RECOVER_MISSING_CWD
 fi
 
 if [ -n "${DSH_WEB_PUBLIC_URL:-}" ]; then

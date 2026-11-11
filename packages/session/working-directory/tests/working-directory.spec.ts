@@ -118,6 +118,16 @@ describe('Session working directories', () => {
     await expect(f.ctx.workingDirectory.set(agent, f.root)).resolves.toBe(f.root)
   })
 
+  it('recovers a vanished hosted project to the persistent default directory', async () => {
+    await using f = await fixture(root => ({ defaultDirectory: root, recoverToDefault: true }))
+    const origin = join(f.root, 'ephemeral')
+    await mkdir(origin)
+    const agent = await f.harness.create(SessionId('restored-hosted-origin'), {}, { cwd: origin })
+    await rm(origin, { recursive: true })
+    await expect(f.ctx.workingDirectory.ensure(agent)).resolves.toBe(f.root)
+    expect(f.ctx.workingDirectory.get(agent.session)).toBe(f.root)
+  })
+
   it('rejects files, empty paths, and cancelled changes without changing state', async () => {
     await using f = await fixture()
     await writeFile(join(f.root, 'file'), '')
