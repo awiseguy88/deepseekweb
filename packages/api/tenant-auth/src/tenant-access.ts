@@ -98,18 +98,28 @@ export interface TenantAccessRemoteDescriptor {
   readonly method: string
 }
 
+/**
+ * One Typert endpoint registry as this module reads it: the Host invocation
+ * registry (`local`) carries the descriptors the Gateway dispatches, while a
+ * client assembly may additionally contribute consumer-selected remotes.
+ */
+export interface TenantAccessEndpointRegistry {
+  /** @returns a registration-order snapshot of endpoint descriptors. */
+  list(): readonly TenantAccessRemoteDescriptor[]
+  /**
+   * Observe later endpoint changes.
+   * @param listener - synchronous observer.
+   * @returns disposer for this subscription.
+   */
+  subscribe(listener: () => void): () => void | Promise<void>
+}
+
 /** The Host `typert` members this module calls. */
 export interface TenantAccessRuntime {
-  readonly remotes: {
-    /** @returns a registration-order snapshot of Remote descriptors. */
-    list(): readonly TenantAccessRemoteDescriptor[]
-    /**
-     * Observe later Remote contribution changes.
-     * @param listener - synchronous observer.
-     * @returns disposer for this subscription.
-     */
-    subscribe(listener: () => void): () => Promise<void>
-  }
+  /** Host invocation registry; the authoritative endpoint set for dispatch. */
+  readonly local?: TenantAccessEndpointRegistry
+  /** Consumer-selected Remote contributions, when this composition has any. */
+  readonly remotes?: TenantAccessEndpointRegistry
 }
 
 /** The tenant and user that own a claimed Session or Workspace. */
@@ -210,13 +220,18 @@ function endpointOf(descriptor: TenantAccessRemoteDescriptor): TenantAccessActio
 
 /**
  * The action set every tenant role lists: the live Remote endpoints plus the
- * forwarded Session events.
+ * forwarded Session events. The Host `local` registry carries the endpoints
+ * the Gateway dispatches; a consumer-selected `remotes` registry may add more.
  * @param runtime - the Host Typert runtime.
  * @returns the current actions.
  */
 function currentActions(runtime: TenantAccessRuntime): readonly TenantAccessAction[] {
-  const endpoints = runtime.remotes.list().map(endpointOf)
-  return [...endpoints, ...FORWARDED_EVENT_ACTIONS]
+  const endpoints = new Map<string, TenantAccessAction>()
+  for (const registry of [runtime.local, runtime.remotes]) {
+    if (registry === undefined) continue
+    for (const descriptor of registry.list()) endpoints.set(`${descriptor.namespace}/${descriptor.method}`, endpointOf(descriptor))
+  }
+  return [...endpoints.values(), ...FORWARDED_EVENT_ACTIONS]
 }
 
 /**
@@ -243,7 +258,7 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
   let actions: readonly TenantAccessAction[] = []
   let registrar: TenantAccessRegistrar | undefined
   let removePolicy: (() => void) | undefined
-  let unsubscribe: (() => Promise<void>) | undefined
+  let unsubscribe: (() => void) | undefined
   const removeOwnershipServices: Array<() => void> = []
   let started = false
   let disposed = false
@@ -327,11 +342,19 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
   async function hydrate(): Promise<void> {
     const runtime = readService(ctx, 'typert') as TenantAccessRuntime
     registrar = readService(ctx, 'remoteAccess') as TenantAccessRegistrar
-    actions = currentActions(runtime)
-    unsubscribe = runtime.remotes.subscribe(() => {
+    const refresh = (): void => {
       actions = currentActions(runtime)
       registrar?.invalidate()
-    })
+    }
+    const stops: Array<() => void | Promise<void>> = []
+    for (const registry of [runtime.local, runtime.remotes]) {
+      if (registry === undefined) continue
+      stops.push(registry.subscribe(refresh))
+    }
+    unsubscribe = () => {
+      for (const stop of stops) void stop()
+    }
+    actions = currentActions(runtime)
     removePolicy = registrar.registerPolicy('tenant', policy)
     // The controllers read the ownership services by name, so this factory is
     // also their provider; providing through the fiber disposes them with the
