@@ -21,6 +21,14 @@ export function apply(ctx: Context, config: Config): void {
     ? createPostgresTenantAuthStore(config.connectionString ?? process.env.DATABASE_URL ?? '')
     : { store: config.store, close: async () => {} }
   ctx.effect(() => {
+    const disposeLogin = webServer.register({
+      kind: 'exact',
+      path: '/login',
+      handler: (_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+        response.end(LOGIN_HTML)
+      },
+    })
     const dispose = webServer.register({
       kind: 'prefix',
       path: '/auth',
@@ -31,9 +39,11 @@ export function apply(ctx: Context, config: Config): void {
       path: '/admin',
       handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, database.store, connection),
     })
-    return async () => { dispose(); disposeAdmin(); await database.close() }
+    return async () => { disposeLogin(); dispose(); disposeAdmin(); await database.close() }
   }, 'wiseai-tenant-auth: routes')
 }
+
+const LOGIN_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WiseAI sign in</title><style>body{font:16px system-ui;max-width:26rem;margin:12vh auto;padding:2rem;background:#101116;color:#f5f5f5}form{display:grid;gap:1rem}input,button{font:inherit;padding:.75rem;border-radius:.5rem;border:1px solid #555}button{background:#7c5cff;color:#fff;cursor:pointer}#error{color:#ff8f8f;min-height:1.5em}</style></head><body><h1>Sign in to WiseAI</h1><form id="form"><label>Email<br><input name="email" type="email" autocomplete="username" required></label><label>Password<br><input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div id="error" role="alert"></div></form><script>const form=document.querySelector('#form'),error=document.querySelector('#error');form.addEventListener('submit',async event=>{event.preventDefault();error.textContent='';const body=Object.fromEntries(new FormData(form));const result=await fetch('/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(result.ok)location.href='/';else error.textContent='Unable to sign in with those credentials.'})</script></body></html>`
 
 async function route(
   request: IncomingMessage,
