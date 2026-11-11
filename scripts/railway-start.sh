@@ -19,8 +19,14 @@ else
   trusted_host="$RAILWAY_PUBLIC_DOMAIN"
 fi
 
-set -- $(hostname -i)
-bind_host="${1:-}"
+set -- $(hostname -I 2>/dev/null || hostname -i)
+bind_host=""
+for candidate in "$@"; do
+  case "$candidate" in
+    127.*|::1) continue ;;
+    *) bind_host="$candidate"; break ;;
+  esac
+done
 if [ -z "$bind_host" ]; then
   echo 'Cannot determine the container IP address.' >&2
   exit 69
