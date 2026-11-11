@@ -949,6 +949,7 @@ const requiredStartupEntryIds = new Set<string>([
   'tool-executor-ptc',
   'webserver',
   'web-runtime',
+  'wiseai-tenant-auth',
   'modules',
   'connection',
   'headless-runner',

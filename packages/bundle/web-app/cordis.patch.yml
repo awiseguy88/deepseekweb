@@ -257,8 +257,6 @@
     - id: wiseai-tenant-auth
       name: '@deepseek-ai/dsh-api-tenant-auth'
       disabled: !!js process.env.WISEAI_AUTH_REQUIRED !== '1'
-      config:
-        connectionString: !!js process.env.DATABASE_URL
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.

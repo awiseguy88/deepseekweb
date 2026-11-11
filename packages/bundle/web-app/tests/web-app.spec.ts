@@ -418,6 +418,7 @@ describe('web-app runtime glue', () => {
     { id: 'webserver', announces: false },
     { id: 'modules', announces: false },
     { id: 'connection', announces: false },
+    { id: 'wiseai-tenant-auth', announces: false },
     { id: 'optional-tool', announces: true },
   ])('announces readiness=$announces after the $id sibling fails', async ({ id, announces }) => {
     stageDist()

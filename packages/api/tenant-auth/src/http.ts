@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { hashPassword, verifyPassword } from './password.ts'
 import { issueSession, logoutSession, resolveSession } from './session-tokens.ts'
 import type { TenantAuthStore } from './types.ts'
@@ -51,9 +52,9 @@ export async function handleNodeAuthRequest(
     if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value)
   }
   const result = await tenantAuthHandler(store, new Request(url, {
-    method: request.method,
+    method: request.method ?? 'GET',
     headers,
-    body: chunks.length === 0 ? undefined : Buffer.concat(chunks),
+    ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
   }), registrar)
   response.writeHead(result.status, Object.fromEntries(result.headers.entries()))
   response.end(Buffer.from(await result.arrayBuffer()))
@@ -109,4 +110,3 @@ async function handle(store: TenantAuthStore, request: Request, registrar?: Tena
   }
   return json({ error: 'not_found' }, { status: 404 })
 }
-import type { IncomingMessage, ServerResponse } from 'node:http'

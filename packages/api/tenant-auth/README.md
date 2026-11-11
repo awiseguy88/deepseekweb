@@ -1,17 +1,6 @@
-# Tenant authentication contracts
-
-This package defines the server-side identity and tenant-root seams used by the WiseAI deployment. It does not trust tenant IDs from browser requests: the host must resolve a session cookie through a `TenantAuthStore`, then derive `TenantRoots` from that authenticated session.
-
-The production store is intended to use Railway Postgres through `DATABASE_URL`. Password verification belongs in the host authentication service and must use a password hash (Argon2id or an equivalent memory-hard password hash), never reversible encryption. Session tokens must be random, stored hashed, scoped to one user and tenant, and revoked on logout.
-
-The root layout is:
-
-```text
-<DSH data root>/tenants/<tenant-id>/{sessions,workspace,credentials,failures}
-```
-
-This package contains contracts only. It is deliberately not mounted into the Web bundle until the host authentication and Remote principal integration are implemented together.
 # WiseAI tenant authentication
+
+With `WISEAI_AUTH_REQUIRED=1`, the Web profile loads this plugin after Connection and WebServer become available. Open `/login` to sign in. If the enabled plugin fails to activate, Web startup reports the failure. The PostgreSQL connection URL comes from the host environment.
 
 This package provides the server-side identity seam for a hosted WiseAI deployment. Passwords are hashed with Node's built-in Argon2id implementation; browser sessions are opaque random tokens whose SHA-256 digests are stored in PostgreSQL. The `tenantAuthHandler` function is intentionally transport-neutral and can be mounted at `/auth/*` by the host WebServer.
 

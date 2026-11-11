@@ -6,6 +6,7 @@
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
+    "./package.json": "./package.json",
     ".": {
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
@@ -22,7 +23,14 @@
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
+  "peerDependencies": { "@deepseek-ai/cordis": "workspace:~" },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:~",
+    "@types/node": "24.13.3",
+    "@types/pg": "^8.15.5"
+  },
   "dependencies": {
+    "@deepseek-ai/schemastery": "workspace:~",
     "@deepseek-ai/dsh-client-connection": "workspace:*",
     "@deepseek-ai/dsh-host-webserver": "workspace:*",
     "pg": "^8.23.1"

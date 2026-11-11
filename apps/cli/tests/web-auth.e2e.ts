@@ -65,16 +65,22 @@ function cleanEnvironment(root: string, dshHome: string): NodeJS.ProcessEnv {
 }
 
 /** Start the public source CLI and wait for its authenticated readiness URL. */
-async function startWeb(root: string, dshHome: string, port: number): Promise<RunningWeb> {
+async function startWeb(root: string, dshHome: string, port: number, hosted = false): Promise<RunningWeb> {
   const child = spawn(process.execPath, [
-    '--import', TSX_LOADER,
-    DSH_SOURCE_BIN,
+    ...hosted ? [join(REPO_ROOT, 'apps/cli/lib/bin.js')] : ['--import', TSX_LOADER, DSH_SOURCE_BIN],
     'web',
     '--no-open',
     '--port', String(port),
   ], {
     cwd: root,
-    env: cleanEnvironment(root, dshHome),
+    env: {
+      ...cleanEnvironment(root, dshHome),
+      ...(hosted && {
+        WISEAI_AUTH_REQUIRED: '1',
+        WISEAI_ADMIN_EMAIL: '',
+        DATABASE_URL: 'postgresql://localhost:1/unused',
+      }),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -87,6 +93,7 @@ async function startWeb(root: string, dshHome: string, port: number): Promise<Ru
       reject(error)
     }
     const timer = setTimeout(() => {
+      child.kill('SIGKILL')
       fail(new Error(`dsh web did not become ready:\n${redact(output)}`))
     }, 90_000)
     const append = (chunk: Buffer | string): void => {
@@ -152,6 +159,28 @@ function describeSettings(port: number, host: string, cookie?: string): Promise<
 }
 
 describe('dsh web authentication through the real CLI', () => {
+  it('serves the public sign-in form from the built hosted Web profile', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'wiseai-hosted-login-'))
+    let running: RunningWeb | undefined
+    try {
+      running = await startWeb(root, join(root, '.dsh'), 0, true)
+      const login = new URL('/login', running.launchUrl)
+      const response = await fetch(login, { redirect: 'manual' })
+      expect(response.status, redact(running.output())).toBe(200)
+      expect(response.headers.get('content-type')).toContain('text/html')
+      expect(await response.text()).toContain('Sign in to WiseAI')
+      const denied = await fetch(new URL('/auth/login', login), {
+        method: 'POST',
+        headers: { origin: 'https://unrelated.invalid', 'content-type': 'application/json' },
+        body: '{}',
+      })
+      expect(denied.status).toBe(403)
+    } finally {
+      if (running) await stopWeb(running)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects a forged loopback Host and preserves the browser cookie across restart', { timeout: 180_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-web-auth-real-cli-'))
     const dshHome = join(root, '.dsh')

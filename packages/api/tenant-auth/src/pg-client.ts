@@ -9,7 +9,7 @@ export function createPostgresTenantAuthStore(connectionString: string): {
   if (!connectionString.startsWith('postgres://') && !connectionString.startsWith('postgresql://')) throw new Error('DATABASE_URL must be a PostgreSQL URL')
   const pool = new Pool({ connectionString, max: 10, idleTimeoutMillis: 30_000 })
   return {
-    store: new PostgresTenantAuthStore({ query: async (sql, parameters) => pool.query(sql, parameters) }),
+    store: new PostgresTenantAuthStore({ query: (sql, parameters) => pool.query(sql, [...parameters]) }),
     close: () => pool.end(),
   }
 }

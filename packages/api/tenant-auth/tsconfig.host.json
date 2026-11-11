@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": { "outDir": "lib/host" },
-  "references": [
-    { "path": "../../client/connection/tsconfig.host.json" },
-    { "path": "../../host/webserver/tsconfig.json" }
-  ]
-}
