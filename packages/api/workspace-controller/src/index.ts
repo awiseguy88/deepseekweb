@@ -110,7 +110,7 @@ export class WorkspaceController extends TypertRemoteService {
   @Remote('create')
   async create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
     const value = await this.commands.create(request)
-    if (value.created) this.claimWorkspaceOwnership(value.workspace.workspaceId)
+    if (value.created) await this.claimWorkspaceOwnership(value.workspace.workspaceId)
     return value
   }
 
@@ -119,10 +119,10 @@ export class WorkspaceController extends TypertRemoteService {
    * optional service is absent when the deployment does not partition Workspaces.
    * @param workspaceId - the Workspace returned by the successful create.
    */
-  private claimWorkspaceOwnership(workspaceId: WorkspaceId): void {
+  private async claimWorkspaceOwnership(workspaceId: WorkspaceId): Promise<void> {
     const principal = principalOf(this.ctx.invocation)
     if (principal?.kind !== 'tenant') return
-    this.ctx.get('workspaceOwnership')?.claimWorkspace(workspaceId, {
+    await this.ctx.get('workspaceOwnership')?.claimWorkspace(workspaceId, {
       tenantId: principal.tenantId,
       userId: principal.userId,
     })
@@ -150,7 +150,7 @@ export class WorkspaceController extends TypertRemoteService {
       return tenant === undefined ? root : join(root, 'tenants', tenant.tenantId)
     })
     if (workspace === undefined) return undefined
-    this.claimWorkspaceOwnership(workspace.id)
+    await this.claimWorkspaceOwnership(workspace.id)
     return { workspace: workspaceView(workspace) }
   }
 

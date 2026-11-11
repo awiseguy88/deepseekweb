@@ -582,10 +582,12 @@ export interface SessionOwner {
 export interface SessionOwnership {
   /**
    * Record the caller tenant as the Session owner for list and call filtering.
+   * The claim is durable when this resolves; a rejected promise means no
+   * ownership was granted and the caller must not treat the Session as its own.
    * @param sessionId - the created Session.
    * @param owner - the tenant and user that created it.
    */
-  claimSession(sessionId: SessionId, owner: SessionOwner): void
+  claimSession(sessionId: SessionId, owner: SessionOwner): Promise<void>
 }
 
 declare module '@deepseek-ai/cordis' {

@@ -223,7 +223,7 @@ describe('ownership claims', () => {
   it('adds the Session claim to memory, persists it, and invalidates readers', async () => {
     const f = await started()
 
-    f.access.sessionOwnership.claimSession(sessionId('s-new'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await f.access.sessionOwnership.claimSession(sessionId('s-new'), { tenantId: 'tenant-a', userId: 'user-a' })
 
     expect(resourcesOf(f.remote.bindingsFor(TENANT_A))).toEqual(['global', 'session:s-new'])
     expect(f.store.sessionClaims).toEqual([{ sessionId: 's-new', tenantId: 'tenant-a', userId: 'user-a' }])
@@ -233,7 +233,7 @@ describe('ownership claims', () => {
   it('adds the Workspace claim to memory, persists it, and invalidates readers', async () => {
     const f = await started()
 
-    f.access.workspaceOwnership.claimWorkspace(workspaceId('w-new'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await f.access.workspaceOwnership.claimWorkspace(workspaceId('w-new'), { tenantId: 'tenant-a', userId: 'user-a' })
 
     expect(resourcesOf(f.remote.bindingsFor(TENANT_A))).toEqual(['global', 'workspace:w-new'])
     expect(f.store.workspaceClaims).toEqual([{ workspaceId: 'w-new', tenantId: 'tenant-a', userId: 'user-a' }])
@@ -242,17 +242,17 @@ describe('ownership claims', () => {
 
   it('keeps one tenant claim invisible to another tenant', async () => {
     const f = await started()
-    f.access.sessionOwnership.claimSession(sessionId('s-only-a'), { tenantId: 'tenant-a', userId: 'user-a' })
-    f.access.workspaceOwnership.claimWorkspace(workspaceId('w-only-a'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await f.access.sessionOwnership.claimSession(sessionId('s-only-a'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await f.access.workspaceOwnership.claimWorkspace(workspaceId('w-only-a'), { tenantId: 'tenant-a', userId: 'user-a' })
 
     expect(resourcesOf(f.remote.bindingsFor(TENANT_B))).toEqual(['global'])
   })
 
   it('keeps the first claim of a resource and persists it once', async () => {
     const f = await started()
-    f.access.sessionOwnership.claimSession(sessionId('s-one'), { tenantId: 'tenant-a', userId: 'user-a' })
-    f.access.sessionOwnership.claimSession(sessionId('s-one'), { tenantId: 'tenant-b', userId: 'user-b' })
-    f.access.sessionOwnership.claimSession(sessionId('s-one'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await f.access.sessionOwnership.claimSession(sessionId('s-one'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await f.access.sessionOwnership.claimSession(sessionId('s-one'), { tenantId: 'tenant-b', userId: 'user-b' })
+    await f.access.sessionOwnership.claimSession(sessionId('s-one'), { tenantId: 'tenant-a', userId: 'user-a' })
 
     expect(resourcesOf(f.remote.bindingsFor(TENANT_A))).toEqual(['global', 'session:s-one'])
     expect(resourcesOf(f.remote.bindingsFor(TENANT_B))).toEqual(['global'])
@@ -262,23 +262,22 @@ describe('ownership claims', () => {
 
   it('ignores a claim without a tenant id', async () => {
     const f = await started()
-    f.access.sessionOwnership.claimSession(sessionId('s-orphan'), { tenantId: '', userId: 'user-a' })
+    await f.access.sessionOwnership.claimSession(sessionId('s-orphan'), { tenantId: '', userId: 'user-a' })
 
     expect(f.store.sessionClaims).toEqual([])
     expect(f.remote.invalidations).toBe(0)
     expect(resourcesOf(f.remote.bindingsFor(TENANT_A))).toEqual(['global'])
   })
 
-  it('logs a persistence failure and still serves the claim from memory', async () => {
-    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('rejects a failed persistence and grants no temporary access', async () => {
     const f = await started()
     f.store.failSessionClaims = true
 
-    f.access.sessionOwnership.claimSession(sessionId('s-unsaved'), { tenantId: 'tenant-a', userId: 'user-a' })
+    await expect(f.access.sessionOwnership.claimSession(sessionId('s-unsaved'), { tenantId: 'tenant-a', userId: 'user-a' }))
+      .rejects.toThrow('session ownership write failed')
 
-    expect(resourcesOf(f.remote.bindingsFor(TENANT_A))).toEqual(['global', 'session:s-unsaved'])
-    await vi.waitFor(() => { expect(report).toHaveBeenCalled() })
-    expect(report.mock.calls[0]?.[0]).toContain('failed to record resource ownership')
+    expect(resourcesOf(f.remote.bindingsFor(TENANT_A))).toEqual(['global'])
+    expect(f.remote.invalidations).toBe(0)
   })
 })
 

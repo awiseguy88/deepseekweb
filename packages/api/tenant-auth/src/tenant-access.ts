@@ -302,10 +302,9 @@ function currentActions(runtime: TenantAccessRuntime, allowed: readonly string[]
  * Build the ownership cache and the tenant policy for one Host.
  *
  * The returned service is inert until {@link TenantAccess.start} hydrates the
- * cache and registers the policy. Ownership claims update memory first, then
- * append the claim to the store without awaiting it; a store failure is
- * reported and leaves the in-memory ownership intact, so the tenant keeps
- * access to the resource it created for the lifetime of this Host.
+ * cache and registers the policy. Ownership claims persist first and publish to
+ * memory only after the store accepts them; a failed claim rejects and leaves
+ * the tenant without access rather than granting temporary ownership.
  * @param options - Host Context and ownership persistence.
  * @returns the ownership services and their lifecycle.
  * @throws Error when the configured store lacks the ownership members.
@@ -363,41 +362,39 @@ export function createTenantAccess(options: TenantAccessOptions): TenantAccess {
   }
 
   /**
-   * Record one ownership claim: the first claim of a resource wins, and the
-   * claim reaches the open readers as soon as memory holds it.
+   * Record one ownership claim after its durable write: the first claim of a
+   * resource wins, and a failed write rejects without publishing any access.
    */
-  function claim<Id extends string>(
+  async function claim<Id extends string>(
     owners: Map<string, Set<Id>>,
     id: Id,
     owner: TenantAccessOwner,
     persist: () => Promise<void>,
-  ): void {
+  ): Promise<void> {
     if (owner.tenantId.length === 0) return
     for (const ids of owners.values()) {
       if (ids.has(id)) return
     }
+    await persist()
     let ids = owners.get(owner.tenantId)
     if (ids === undefined) {
       ids = new Set<Id>()
       owners.set(owner.tenantId, ids)
     }
     ids.add(id)
-    void persist().catch((error: unknown) => {
-      console.error('[wiseai-tenant-auth] failed to record resource ownership:', error)
-    })
     registrar?.invalidate()
   }
 
   const sessionOwnership: TenantSessionOwnership = {
-    claimSession(sessionId, owner): void {
-      claim(sessions, sessionId, owner, () => ownership.claimSessionOwner({
+    claimSession(sessionId, owner): Promise<void> {
+      return claim(sessions, sessionId, owner, () => ownership.claimSessionOwner({
         sessionId, tenantId: owner.tenantId, userId: owner.userId,
       }))
     },
   }
   const workspaceOwnership: TenantWorkspaceOwnership = {
-    claimWorkspace(workspaceId, owner): void {
-      claim(workspaces, workspaceId, owner, () => ownership.claimWorkspaceOwner({
+    claimWorkspace(workspaceId, owner): Promise<void> {
+      return claim(workspaces, workspaceId, owner, () => ownership.claimWorkspaceOwner({
         workspaceId, tenantId: owner.tenantId, userId: owner.userId,
       }))
     },

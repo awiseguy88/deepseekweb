@@ -325,7 +325,7 @@ export class SessionController extends TypertRemoteService {
   @Remote({ name: 'create', resources: { session: () => undefined } })
   async create(request: SessionCreateRequest): Promise<SessionCreateValue> {
     const value = await this.commands.create(request)
-    this.claimSessionOwnership(value.sessionId)
+    await this.claimSessionOwnership(value.sessionId)
     return value
   }
 
@@ -477,7 +477,7 @@ export class SessionController extends TypertRemoteService {
       }
     }
     const value = await this.commands.fork(request)
-    this.claimSessionOwnership(value.sessionId)
+    await this.claimSessionOwnership(value.sessionId)
     return value
   }
 
@@ -486,10 +486,10 @@ export class SessionController extends TypertRemoteService {
    * optional service is absent when the deployment does not partition Sessions.
    * @param sessionId - the Session returned by the successful create or fork.
    */
-  private claimSessionOwnership(sessionId: SessionId): void {
+  private async claimSessionOwnership(sessionId: SessionId): Promise<void> {
     const principal = principalOf(this.ctx.invocation)
     if (principal?.kind !== 'tenant') return
-    this.ctx.get('sessionOwnership')?.claimSession(sessionId, {
+    await this.ctx.get('sessionOwnership')?.claimSession(sessionId, {
       tenantId: principal.tenantId,
       userId: principal.userId,
     })

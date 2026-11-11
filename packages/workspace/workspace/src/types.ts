@@ -166,10 +166,12 @@ export interface WorkspaceOwner {
 export interface WorkspaceOwnership {
   /**
    * Record the caller tenant as the Workspace owner for list and call filtering.
+   * The claim is durable when this resolves; a rejected promise means no
+   * ownership was granted.
    * @param workspaceId - the created Workspace.
    * @param owner - the tenant and user that created it.
    */
-  claimWorkspace(workspaceId: WorkspaceId, owner: WorkspaceOwner): void
+  claimWorkspace(workspaceId: WorkspaceId, owner: WorkspaceOwner): Promise<void>
 }
 
 declare module '@deepseek-ai/cordis' {
