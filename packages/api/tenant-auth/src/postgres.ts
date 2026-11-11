@@ -476,8 +476,28 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return row === undefined ? null : accountRecord(row)
   }
 
-  async recordLogin(userId: string): Promise<void> {
-    const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim().toLowerCase() ?? ''
+  async deleteTenant(tenantId: string): Promise<boolean> {
+    const result = await this.db.query<{ tenant_id: string }>(
+      'DELETE FROM wiseai_tenants WHERE tenant_id = $1 RETURNING tenant_id',
+      [tenantId],
+    )
+    return result.rows.length > 0
+  }
+
+  async revokeSessions(filter: { readonly tenantId?: string } = {}): Promise<number> {
+    const result = filter.tenantId === undefined
+      ? await this.db.query<{ session_id: string }>(
+        'UPDATE wiseai_sessions SET revoked_at = now() WHERE revoked_at IS NULL RETURNING session_id',
+        [],
+      )
+      : await this.db.query<{ session_id: string }>(
+        'UPDATE wiseai_sessions SET revoked_at = now() WHERE revoked_at IS NULL AND tenant_id = $1 RETURNING session_id',
+        [filter.tenantId],
+      )
+    return result.rows.length
+  }
+
+  async recordLogin(userId: string): Promise<void> {    const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim().toLowerCase() ?? ''
     await this.db.query(
       `UPDATE wiseai_users
           SET last_seen_at = now(), updated_at = now(),

@@ -85,6 +85,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly userId: string
       readonly role: 'admin' | 'member'
       readonly platformAdmin?: boolean
+      readonly email?: string
     }
   }
 }

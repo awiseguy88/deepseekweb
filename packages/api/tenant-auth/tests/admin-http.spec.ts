@@ -262,6 +262,14 @@ class FakeStore implements TenantAuthStore {
     this.salesLimits.push(limit)
     return this.sales
   }
+
+  async deleteTenant(): Promise<boolean> {
+    return false
+  }
+
+  async revokeSessions(): Promise<number> {
+    return 0
+  }
 }
 
 function signedIn(store: FakeStore, overrides: Partial<TenantUserRecord> = {}): FakeStore {

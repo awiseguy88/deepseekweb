@@ -544,10 +544,21 @@ export async function adminApiResponse(store: TenantAuthStore, request: Request)
     if (tenantScope !== undefined && tenantId !== tenantScope) return forbidden()
     return addCustomerUser(store, tenantId, request)
   }
+  if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'delete' && method === 'POST') {
+    if (tenantScope !== undefined) return forbidden()
+    const tenantId = decodeURIComponent(rest[0])
+    if (tenantId === principal.user.tenantId) return invalidRequest()
+    const deleted = await store.deleteTenant(tenantId)
+    return deleted ? json({ ok: true }) : notFound()
+  }
   if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
     return updateUser(store, principal.user, tenantScope, decodeURIComponent(rest[0]), request)
   }
   if (resource === 'sessions' && rest.length === 0 && method === 'GET') return listSessions(store, tenantScope, url)
+  if (resource === 'sessions' && rest.length === 1 && rest[0] === 'revoke-all' && method === 'POST') {
+    const revoked = await store.revokeSessions(tenantScope === undefined ? {} : { tenantId: tenantScope })
+    return json({ ok: true, revoked })
+  }
   if (resource === 'sessions' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'revoke' && method === 'POST') {
     return revokeSession(store, tenantScope, decodeURIComponent(rest[0]))
   }

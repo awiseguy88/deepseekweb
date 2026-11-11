@@ -242,6 +242,10 @@ export interface TenantAuthStore {
   updateSupportRequest(requestId: string, patch: SupportRequestPatch): Promise<SupportRequestRecord | null>
   recordSalesEvent(input: SalesEventInput): Promise<void>
   listSalesEvents(limit?: number): Promise<readonly SalesEventRecord[]>
+  /** Delete one customer tenant; its users, sessions, and support rows cascade. */
+  deleteTenant(tenantId: string): Promise<boolean>
+  /** Revoke every live login session, optionally for one tenant. */
+  revokeSessions(filter?: { readonly tenantId?: string }): Promise<number>
 
   /*
    * Tenant ownership of Sessions and Workspaces. Optional so an identity-only

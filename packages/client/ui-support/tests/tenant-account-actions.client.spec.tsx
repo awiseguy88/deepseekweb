@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
-import { TenantAccountActions } from '../src/client/TenantAccountActions.tsx'
+import { TenantAccountActions, type TenantAccountActionsProps } from '../src/client/TenantAccountActions.tsx'
 import { en, zh } from '../src/client/locales.ts'
 
 afterEach(() => {
@@ -12,7 +12,7 @@ afterEach(() => {
 })
 
 const t = makeTranslate(en)
-const props = (wide = true) => ({ wide, t } as never)
+const props = (wide = true): TenantAccountActionsProps => ({ wide, t }) as TenantAccountActionsProps
 
 function respond(status: number): ReturnType<typeof vi.fn> {
   const fetchStub = vi.fn(async () => ({ ok: status === 200, status }) as Response)

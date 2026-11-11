@@ -203,6 +203,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
           <button type="submit" class="btn ghost">Filter</button>
         </form>
         <button type="button" class="btn ghost" id="sessions-refresh">Refresh</button>
+        <button type="button" class="btn danger" id="sessions-revoke-all">Revoke all</button>
       </div>
     </div>
     <p class="state" id="sessions-status" role="status"></p>
@@ -252,7 +253,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
         <label class="field"><span>Access until</span><input id="customer-profile-access" type="datetime-local"><span class="field-hint">Empty means no expiry.</span></label>
         <label class="field field-wide"><span>Notes</span><textarea id="customer-profile-notes" rows="3"></textarea></label>
         <p class="mono small muted field-wide" id="customer-profile-meta"></p>
-        <div class="form-actions field-wide"><button type="submit" class="btn primary" id="customer-profile-submit">Save profile</button></div>
+        <div class="form-actions field-wide"><button type="submit" class="btn primary" id="customer-profile-submit">Save profile</button><button type="button" class="btn danger" id="customer-delete">Delete customer</button></div>
       </form>
     </section>
     <section class="detail-section" aria-labelledby="customer-users-title">
@@ -562,6 +563,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     $('new-customer-open').hidden = true;
     $('tab-sales').hidden = true;
     $('panel-sales').hidden = true;
+    $('customer-delete').hidden = true;
     $('tab-users').hidden = false;
     state.customerTenant = me.tenantId;
   }
@@ -1029,6 +1031,29 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     });
   }
 
+  function revokeAllSessions() {
+    if (!window.confirm('Revoke every live login session? Users must sign in again.')) return;
+    api('/admin/api/sessions/revoke-all', { method: 'POST' }).then(function (payload) {
+      toast('Revoked ' + String((payload && payload.revoked) || 0) + ' sessions.', 'ok');
+      loadSessions();
+    }).catch(function (error) {
+      toast('Could not revoke sessions: ' + error.message, 'error');
+    });
+  }
+
+  function deleteCustomer() {
+    var tenantId = state.customerTenant;
+    if (!tenantId) return;
+    if (!window.confirm('Delete this customer? Its accounts, login sessions, and support requests are removed.')) return;
+    api('/admin/api/customers/' + encodeURIComponent(tenantId) + '/delete', { method: 'POST' }).then(function () {
+      toast('Customer deleted.', 'ok');
+      closeDialog('customer-dialog');
+      loadCustomers();
+    }).catch(function (error) {
+      toast('Could not delete customer: ' + error.message, 'error');
+    });
+  }
+
   function loadSales() {
     beginLoad('panel-sales', 'sales-status');
     api('/admin/api/sales').then(function (payload) {
@@ -1131,6 +1156,8 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
       state.sessionTenant = $('session-tenant').value.trim();
       loadSessions();
     });
+    $('sessions-revoke-all').addEventListener('click', revokeAllSessions);
+    $('customer-delete').addEventListener('click', deleteCustomer);
     $('sales-refresh').addEventListener('click', loadSales);
     Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (button) {
       button.addEventListener('click', function () { closeDialog(button.getAttribute('data-close')); });
