@@ -7,6 +7,9 @@ import { handleNodeAuthRequest } from './http.ts'
 import type { TenantAuthStore } from './types.ts'
 import { hashPassword } from './password.ts'
 import { createPostgresTenantAuthStore } from './pg-client.ts'
+import { handleAdminApi, handleSupportApi, resolvePlatformAdmin } from './admin-http.ts'
+import { renderAdminPage } from './admin-page.ts'
+import { parseStripeEvent, stripeConfig, summarizeStripeEvent, verifyStripeSignature } from './stripe.ts'
 
 /** Cordis configuration for the hosted WiseAI tenant auth routes. */
 export interface Config {
@@ -18,16 +21,41 @@ export const name = 'wiseai-tenant-auth'
 export const inject = ['webServer', 'connection']
 export const Config: z<Config> = z.object({ connectionString: z.string() })
 
-/** Mount authentication and admin routes behind the existing Connection trust fence. */
+/** JSON answer with no-store cache semantics for the hosted admin surface. */
+function json(response: ServerResponse, status: number, value: unknown): void {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  response.end(JSON.stringify(value))
+}
+
+/** Version 4 plugin body: authentication, member support intake, admin UI/API, and Stripe. */
 export function apply(ctx: Context, config: Config): void {
   const { webServer, connection } = ctx
   const database = config.store === undefined
     ? createPostgresTenantAuthStore(config.connectionString ?? process.env.DATABASE_URL ?? '')
-    : { store: config.store, close: async () => {} }
+    : { store: config.store, close: async () => {}, migrate: async () => {} }
+  const store = database.store
   const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim()
   const bootstrapPassword = process.env.WISEAI_ADMIN_PASSWORD
-  if (bootstrapEmail !== undefined && bootstrapPassword !== undefined) {
-    void bootstrapAdmin(database.store, bootstrapEmail, bootstrapPassword).catch((error) => {
+  // The schema set is idempotent, so every boot converges an existing database
+  // and a fresh Railway database to the current columns and tables.
+  const migration = database.migrate().catch((error: unknown) => {
+    console.error('[wiseai-tenant-auth] schema migration failed:', error)
+  })
+  if (bootstrapEmail !== undefined && bootstrapEmail.length > 0) {
+    void migration.then(async () => {
+      const existing = await store.findUserByEmail(bootstrapEmail)
+      if (existing !== null) {
+        // Promote an operator provisioned before the platform-admin column
+        // existed; the password variable is only needed to create the account.
+        await store.updateAccount(existing.userId, { platformAdmin: true })
+        return
+      }
+      if (bootstrapPassword === undefined) {
+        console.warn('[wiseai-tenant-auth] WISEAI_ADMIN_EMAIL names no account and WISEAI_ADMIN_PASSWORD is unset; no operator was provisioned')
+        return
+      }
+      await bootstrapAdmin(store, bootstrapEmail, bootstrapPassword)
+    }).catch((error: unknown) => {
       console.error('[wiseai-tenant-auth] admin bootstrap failed:', error)
     })
   }
@@ -43,24 +71,170 @@ export function apply(ctx: Context, config: Config): void {
     const dispose = webServer.register({
       kind: 'prefix',
       path: '/auth',
-      handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, database.store, connection),
+      handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, store, connection),
     })
     const disposeAdmin = webServer.register({
       kind: 'prefix',
       path: '/admin',
-      handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, database.store, connection),
+      handler: (request: IncomingMessage, response: ServerResponse) => adminRoute(request, response, store, connection),
     })
-    return async () => { disposeLogin(); dispose(); disposeAdmin(); await database.close() }
+    const disposeSupport = webServer.register({
+      kind: 'prefix',
+      path: '/support',
+      handler: (request: IncomingMessage, response: ServerResponse) => handleSupportApi(store, request, response),
+    })
+    const stripe = stripeConfig()
+    const disposeStripe = webServer.register({
+      kind: 'exact',
+      path: '/stripe/webhook',
+      handler: (request: IncomingMessage, response: ServerResponse) =>
+        stripeWebhook(request, response, stripe, store),
+    })
+    return async () => {
+      disposeLogin()
+      dispose()
+      disposeAdmin()
+      disposeSupport()
+      disposeStripe()
+      await database.close()
+    }
   }, 'wiseai-tenant-auth: routes')
+}
+
+/**
+ * Dispatch the hosted admin prefix: the page, the platform-API, and the
+ * tenant-scoped endpoints that predate the platform surface.
+ */
+async function adminRoute(
+  request: IncomingMessage,
+  response: ServerResponse,
+  store: TenantAuthStore,
+  connection: HostConnectionHandle,
+): Promise<void> {
+  const pathname = new URL(request.url ?? '/admin', `http://${request.headers.host ?? 'localhost'}`).pathname
+  if (pathname === '/admin' || pathname === '/admin/') {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      json(response, 405, { error: 'method_not_allowed' })
+      return
+    }
+    const admin = await resolvePlatformAdmin(store, nodeRequest(request))
+    if (admin === null) {
+      response.writeHead(302, { location: '/login?next=/admin', 'cache-control': 'no-store' })
+      response.end()
+      return
+    }
+    const html = renderAdminPage()
+    response.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-length': Buffer.byteLength(html),
+    })
+    response.end(request.method === 'HEAD' ? undefined : html)
+    return
+  }
+  if (pathname === '/admin/api' || pathname.startsWith('/admin/api/')) {
+    await handleAdminApi(store, request, response)
+    return
+  }
+  // Tenant-scoped routes keep the Connection trust fence and tenant-session auth.
+  await route(request, response, store, connection)
+}
+
+/**
+ * Verify and record one Stripe webhook event. Checkout sessions carry the
+ * tenant id in their metadata/client_reference_id; subscription events are
+ * joined back through the recorded customer id or the billing email.
+ */
+async function stripeWebhook(
+  request: IncomingMessage,
+  response: ServerResponse,
+  stripe: ReturnType<typeof stripeConfig>,
+  store: TenantAuthStore,
+): Promise<void> {
+  if (!stripe.configured || stripe.webhookSecret === null) {
+    json(response, 503, { error: 'stripe_not_configured' })
+    return
+  }
+  if (request.method !== 'POST') {
+    json(response, 405, { error: 'method_not_allowed' })
+    return
+  }
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += bytes.length
+    if (size > 1_048_576) {
+      json(response, 413, { error: 'request_too_large' })
+      return
+    }
+    chunks.push(bytes)
+  }
+  const payload = Buffer.concat(chunks).toString('utf8')
+  const signature = request.headers['stripe-signature']
+  if (!verifyStripeSignature({ payload, signatureHeader: Array.isArray(signature) ? signature[0] ?? null : signature ?? null, secret: stripe.webhookSecret })) {
+    json(response, 400, { error: 'invalid_signature' })
+    return
+  }
+  const event = parseStripeEvent(payload)
+  if (event === null) {
+    json(response, 400, { error: 'invalid_event' })
+    return
+  }
+  const summary = summarizeStripeEvent(event)
+  const tenantId = summary.tenantHint.tenantId ?? await tenantForStripeHint(store, summary.tenantHint)
+  if (tenantId !== null) {
+    await store.updateTenant(tenantId, {
+      ...summary.tenantPatch,
+      ...summary.tenantHint.customerId === undefined ? {} : { stripeCustomerId: summary.tenantHint.customerId },
+      ...summary.tenantHint.subscriptionId === undefined ? {} : { stripeSubscriptionId: summary.tenantHint.subscriptionId },
+    })
+  }
+  await store.recordSalesEvent(tenantId === null ? summary.sales : { ...summary.sales, tenantId })
+  json(response, 200, { received: true })
+}
+
+/** Resolve the customer tenant recorded for one Stripe event, when possible. */
+async function tenantForStripeHint(
+  store: TenantAuthStore,
+  hint: { readonly email?: string; readonly customerId?: string },
+): Promise<string | null> {
+  if (hint.email !== undefined) {
+    const user = await store.findUserByEmail(hint.email)
+    if (user !== null) return user.tenantId
+  }
+  if (hint.customerId === undefined) return null
+  const tenants = await store.listTenants()
+  return tenants.find(tenant => tenant.stripeCustomerId === hint.customerId)?.tenantId ?? null
+}
+
+/** Convert the raw request into the fetch Request shape shared by the API modules. */
+function nodeRequest(request: IncomingMessage): Request {
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value)
+  }
+  return new Request(new URL(request.url ?? '/admin', `http://${request.headers.host ?? 'localhost'}`), {
+    method: request.method ?? 'GET',
+    headers,
+  })
 }
 
 async function bootstrapAdmin(store: TenantAuthStore, email: string, password: string): Promise<void> {
   if (password.length < 12) throw new Error('WISEAI_ADMIN_PASSWORD must contain at least 12 characters')
-  if (await store.findUserByEmail(email) !== null) return
-  await store.createAdmin(email, await hashPassword(password))
+  const existing = await store.findUserByEmail(email)
+  if (existing !== null) {
+    // Promote an already-created operator without rewriting its password: the
+    // bootstrap variables are a one-shot provisioning step, not a reset flow.
+    await store.updateAccount(existing.userId, { platformAdmin: true })
+    return
+  }
+  const created = await store.createAdmin(email, await hashPassword(password))
+  await store.updateAccount(created.userId, { platformAdmin: true })
+  await store.updateTenant(created.tenantId, { name: 'WiseAI Operations' })
 }
 
-const LOGIN_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WiseAI sign in</title><style>body{font:16px system-ui;max-width:26rem;margin:12vh auto;padding:2rem;background:#101116;color:#f5f5f5}form{display:grid;gap:1rem}input,button{font:inherit;padding:.75rem;border-radius:.5rem;border:1px solid #555}button{background:#7c5cff;color:#fff;cursor:pointer}#error{color:#ff8f8f;min-height:1.5em}</style></head><body><h1>Sign in to WiseAI</h1><form id="form"><label>Email<br><input name="email" type="email" autocomplete="username" required></label><label>Password<br><input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div id="error" role="alert"></div></form><script>const form=document.querySelector(\'#form\'),error=document.querySelector(\'#error\');form.addEventListener(\'submit\',async event=>{event.preventDefault();error.textContent=\'\';const body=Object.fromEntries(new FormData(form));const result=await fetch(\'/auth/login\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify(body)});if(result.ok)location.href=\'/\';else error.textContent=\'Unable to sign in with those credentials.\'})</script></body></html>'
+const LOGIN_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WiseAI sign in</title><style>body{font:16px system-ui;max-width:26rem;margin:12vh auto;padding:2rem;background:#101116;color:#f5f5f5}form{display:grid;gap:1rem}input,button{font:inherit;padding:.75rem;border-radius:.5rem;border:1px solid #555}button{background:#7c5cff;color:#fff;cursor:pointer}#error{color:#ff8f8f;min-height:1.5em}</style></head><body><h1>Sign in to WiseAI</h1><form id="form"><label>Email<br><input name="email" type="email" autocomplete="username" required></label><label>Password<br><input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div id="error" role="alert"></div></form><script>const form=document.querySelector(\'#form\'),error=document.querySelector(\'#error\');form.addEventListener(\'submit\',async event=>{event.preventDefault();error.textContent=\'\';const body=Object.fromEntries(new FormData(form));const result=await fetch(\'/auth/login\',{method:\'POST\',headers:{\'content-type\':\'application/json\'},body:JSON.stringify(body)});if(result.ok){const next=new URLSearchParams(location.search).get(\'next\');location.href=next&&next.startsWith(\'/\')&&!next.startsWith(\'//\')?next:\'/\'}else error.textContent=\'Unable to sign in with those credentials.\'})</script></body></html>'
 
 async function route(
   request: IncomingMessage,

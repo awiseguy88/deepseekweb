@@ -75,6 +75,13 @@ async function handle(store: TenantAuthStore, request: Request, registrar?: Tena
       await logoutSession(store, token)
       throw error
     }
+    // Presence tracking is best effort: a failed timestamp update must not
+    // reject an otherwise valid sign-in.
+    try {
+      await store.recordLogin(user.userId)
+    } catch (error) {
+      console.error('[wiseai-tenant-auth] last-seen update failed:', error)
+    }
     const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : ''
     return json({ user: { userId: user.userId, email: user.email, role: user.role, tenantId: user.tenantId } }, {
       headers: { 'set-cookie': `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${SESSION_DAYS * 86_400}` },

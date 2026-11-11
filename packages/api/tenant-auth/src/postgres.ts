@@ -1,10 +1,31 @@
 import { randomUUID } from 'node:crypto'
-import type { TenantAuthStore, TenantSessionRecord, TenantUserRecord } from './types.ts'
+import type {
+  SalesEventInput,
+  SalesEventRecord,
+  SupportRequestInput,
+  SupportRequestPatch,
+  SupportRequestRecord,
+  TenantAccountPatch,
+  TenantAccountRecord,
+  TenantAuthStore,
+  TenantProfilePatch,
+  TenantRecord,
+  TenantSessionListRecord,
+  TenantSessionRecord,
+  TenantUserRecord,
+} from './types.ts'
 
 /** Minimal query surface, allowing the host to inject its approved Postgres driver. */
 export interface TenantAuthDatabase {
   query<T extends Record<string, unknown>>(sql: string, parameters: readonly unknown[]): Promise<{ readonly rows: readonly T[] }>
 }
+
+const USER_COLUMNS = 'user_id, email, password_hash, role, tenant_id, disabled, platform_admin, last_seen_at, created_at'
+const TENANT_COLUMNS = 'tenant_id, name, plan, status, disabled, stripe_customer_id, stripe_subscription_id, access_until, notes, created_at, updated_at'
+const ACCOUNT_COLUMNS = 'u.user_id, u.tenant_id, t.name AS tenant_name, u.email, u.role, u.platform_admin, u.disabled, u.created_at, u.last_seen_at'
+const SESSION_LIST_COLUMNS = 's.session_id, s.user_id, s.tenant_id, u.email, t.name AS tenant_name, s.expires_at, s.created_at, s.revoked_at'
+const SUPPORT_COLUMNS = 'r.request_id, r.tenant_id, t.name AS tenant_name, r.user_id, r.email, r.subject, r.message, r.page_url, r.status, r.priority, r.admin_note, r.created_at, r.updated_at'
+const SALES_COLUMNS = 'event_id, event_type, tenant_id, customer_id, subscription_id, amount_total, currency, status, created_at'
 
 interface UserRow extends Record<string, unknown> {
   user_id: string
@@ -13,6 +34,35 @@ interface UserRow extends Record<string, unknown> {
   role: 'admin' | 'member'
   tenant_id: string
   disabled: boolean
+  platform_admin: boolean
+  last_seen_at: Date | null
+  created_at: Date
+}
+
+interface TenantRow extends Record<string, unknown> {
+  tenant_id: string
+  name: string
+  plan: string
+  status: TenantRecord['status']
+  disabled: boolean
+  stripe_customer_id: string | null
+  stripe_subscription_id: string | null
+  access_until: Date | null
+  notes: string
+  created_at: Date
+  updated_at: Date
+}
+
+interface AccountRow extends Record<string, unknown> {
+  user_id: string
+  tenant_id: string
+  tenant_name: string
+  email: string
+  role: 'admin' | 'member'
+  platform_admin: boolean
+  disabled: boolean
+  created_at: Date
+  last_seen_at: Date | null
 }
 
 interface SessionRow extends Record<string, unknown> {
@@ -21,6 +71,157 @@ interface SessionRow extends Record<string, unknown> {
   tenant_id: string
   expires_at: Date
   revoked_at: Date | null
+}
+
+interface SessionListRow extends Record<string, unknown> {
+  session_id: string
+  user_id: string
+  tenant_id: string
+  email: string
+  tenant_name: string
+  expires_at: Date
+  created_at: Date
+  revoked_at: Date | null
+}
+
+interface SupportRow extends Record<string, unknown> {
+  request_id: string
+  tenant_id: string
+  tenant_name: string
+  user_id: string
+  email: string
+  subject: string
+  message: string
+  page_url: string
+  status: SupportRequestRecord['status']
+  priority: SupportRequestRecord['priority']
+  admin_note: string
+  created_at: Date
+  updated_at: Date
+}
+
+interface SalesRow extends Record<string, unknown> {
+  event_id: string
+  event_type: string
+  tenant_id: string | null
+  customer_id: string | null
+  subscription_id: string | null
+  amount_total: number | null
+  currency: string | null
+  status: string | null
+  created_at: Date
+}
+
+/** Account emails identify a person across tenants, so they are stored folded. */
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase()
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === '23505'
+}
+
+/** One column assignment whose value is bound as the next positional parameter. */
+type Field = readonly [column: string, value: unknown]
+
+/** Render a dynamic SET list plus its values, always bumping `updated_at`. */
+function assignments(fields: readonly Field[]): { readonly sql: string; readonly parameters: readonly unknown[] } {
+  const parameters: unknown[] = []
+  const columns = fields.map(([column, value]) => {
+    parameters.push(value)
+    return `${column} = $${parameters.length}`
+  })
+  columns.push('updated_at = now()')
+  return { sql: columns.join(', '), parameters }
+}
+
+function userRecord(row: UserRow): TenantUserRecord {
+  return {
+    userId: row.user_id,
+    email: row.email,
+    passwordHash: row.password_hash,
+    role: row.role,
+    tenantId: row.tenant_id,
+    disabled: row.disabled,
+    platformAdmin: row.platform_admin,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+  }
+}
+
+function tenantRecord(row: TenantRow): TenantRecord {
+  return {
+    tenantId: row.tenant_id,
+    name: row.name,
+    plan: row.plan,
+    status: row.status,
+    disabled: row.disabled,
+    stripeCustomerId: row.stripe_customer_id,
+    stripeSubscriptionId: row.stripe_subscription_id,
+    accessUntil: row.access_until,
+    notes: row.notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function accountRecord(row: AccountRow): TenantAccountRecord {
+  return {
+    userId: row.user_id,
+    tenantId: row.tenant_id,
+    tenantName: row.tenant_name,
+    email: row.email,
+    role: row.role,
+    platformAdmin: row.platform_admin,
+    disabled: row.disabled,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+  }
+}
+
+function sessionListRecord(row: SessionListRow): TenantSessionListRecord {
+  return {
+    sessionId: row.session_id,
+    userId: row.user_id,
+    tenantId: row.tenant_id,
+    email: row.email,
+    tenantName: row.tenant_name,
+    expiresAt: row.expires_at,
+    createdAt: row.created_at,
+    revokedAt: row.revoked_at,
+  }
+}
+
+function supportRecord(row: SupportRow): SupportRequestRecord {
+  return {
+    requestId: row.request_id,
+    tenantId: row.tenant_id,
+    tenantName: row.tenant_name,
+    userId: row.user_id,
+    email: row.email,
+    subject: row.subject,
+    message: row.message,
+    pageUrl: row.page_url,
+    status: row.status,
+    priority: row.priority,
+    adminNote: row.admin_note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function salesRecord(row: SalesRow): SalesEventRecord {
+  return {
+    eventId: row.event_id,
+    eventType: row.event_type,
+    tenantId: row.tenant_id,
+    customerId: row.customer_id,
+    subscriptionId: row.subscription_id,
+    amountTotal: row.amount_total,
+    currency: row.currency,
+    status: row.status,
+    createdAt: row.created_at,
+  }
 }
 
 /** Postgres-backed identity lookup; session tokens are passed already hashed. */
@@ -36,7 +237,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
        )
        INSERT INTO wiseai_users (user_id, tenant_id, email, password_hash, role)
        SELECT $2, tenant_id, $3, $4, 'member' FROM tenant`,
-      [tenantId, userId, email.trim(), passwordHash],
+      [tenantId, userId, normalizeEmail(email), passwordHash],
     )
     return { userId, tenantId }
   }
@@ -48,33 +249,27 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       `WITH tenant AS (INSERT INTO wiseai_tenants (tenant_id) VALUES ($1) RETURNING tenant_id)
        INSERT INTO wiseai_users (user_id, tenant_id, email, password_hash, role)
        SELECT $2, tenant_id, $3, $4, 'admin' FROM tenant`,
-      [tenantId, userId, email.trim(), passwordHash],
+      [tenantId, userId, normalizeEmail(email), passwordHash],
     )
     return { userId, tenantId }
   }
 
   async findUserByEmail(email: string): Promise<TenantUserRecord | null> {
     const result = await this.db.query<UserRow>(
-      'SELECT user_id, email, password_hash, role, tenant_id, disabled FROM wiseai_users WHERE lower(email) = lower($1) LIMIT 1',
-      [email],
+      `SELECT ${USER_COLUMNS} FROM wiseai_users WHERE lower(email) = lower($1) LIMIT 1`,
+      [email.trim()],
     )
     const row = result.rows[0]
-    return row === undefined ? null : {
-      userId: row.user_id, email: row.email, passwordHash: row.password_hash,
-      role: row.role, tenantId: row.tenant_id, disabled: row.disabled,
-    }
+    return row === undefined ? null : userRecord(row)
   }
 
   async findUserById(userId: string): Promise<TenantUserRecord | null> {
     const result = await this.db.query<UserRow>(
-      'SELECT user_id, email, password_hash, role, tenant_id, disabled FROM wiseai_users WHERE user_id = $1 LIMIT 1',
+      `SELECT ${USER_COLUMNS} FROM wiseai_users WHERE user_id = $1 LIMIT 1`,
       [userId],
     )
     const row = result.rows[0]
-    return row === undefined ? null : {
-      userId: row.user_id, email: row.email, passwordHash: row.password_hash,
-      role: row.role, tenantId: row.tenant_id, disabled: row.disabled,
-    }
+    return row === undefined ? null : userRecord(row)
   }
 
   async findSession(sessionId: string): Promise<TenantSessionRecord | null> {
@@ -114,19 +309,267 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
 
   async listUsers(tenantId: string): Promise<readonly TenantUserRecord[]> {
     const result = await this.db.query<UserRow>(
-      'SELECT user_id, email, password_hash, role, tenant_id, disabled FROM wiseai_users WHERE tenant_id = $1 ORDER BY created_at, user_id',
+      `SELECT ${USER_COLUMNS} FROM wiseai_users WHERE tenant_id = $1 ORDER BY created_at, user_id`,
       [tenantId],
     )
-    return result.rows.map(row => ({
-      userId: row.user_id, email: row.email, passwordHash: row.password_hash,
-      role: row.role, tenantId: row.tenant_id, disabled: row.disabled,
-    }))
+    return result.rows.map(userRecord)
   }
 
   async setUserDisabled(tenantId: string, userId: string, disabled: boolean): Promise<void> {
     await this.db.query(
-      'UPDATE wiseai_users SET disabled = $3 WHERE user_id = $1 AND tenant_id = $2',
+      'UPDATE wiseai_users SET disabled = $3, updated_at = now() WHERE user_id = $1 AND tenant_id = $2',
       [userId, tenantId, disabled],
     )
+  }
+
+  async createTenant(input: {
+    readonly name: string
+    readonly plan: string
+    readonly adminEmail: string
+    readonly adminPasswordHash: string
+    readonly platformAdmin?: boolean
+  }): Promise<{ tenantId: string; userId: string }> {
+    const tenantId = randomUUID()
+    const userId = randomUUID()
+    try {
+      await this.db.query(
+        `WITH tenant AS (
+           INSERT INTO wiseai_tenants (tenant_id, name, plan) VALUES ($1, $2, $3) RETURNING tenant_id
+         )
+         INSERT INTO wiseai_users (user_id, tenant_id, email, password_hash, role, platform_admin)
+         SELECT $4, tenant_id, $5, $6, 'admin', $7 FROM tenant`,
+        [tenantId, input.name.trim(), input.plan, userId, normalizeEmail(input.adminEmail), input.adminPasswordHash, input.platformAdmin ?? false],
+      )
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new Error('An account with this email already exists')
+      throw error
+    }
+    return { tenantId, userId }
+  }
+
+  async findTenantById(tenantId: string): Promise<TenantRecord | null> {
+    const result = await this.db.query<TenantRow>(
+      `SELECT ${TENANT_COLUMNS} FROM wiseai_tenants WHERE tenant_id = $1 LIMIT 1`,
+      [tenantId],
+    )
+    const row = result.rows[0]
+    return row === undefined ? null : tenantRecord(row)
+  }
+
+  async listTenants(): Promise<readonly TenantRecord[]> {
+    const result = await this.db.query<TenantRow>(
+      `SELECT ${TENANT_COLUMNS} FROM wiseai_tenants ORDER BY created_at DESC, tenant_id`,
+      [],
+    )
+    return result.rows.map(tenantRecord)
+  }
+
+  async updateTenant(tenantId: string, patch: TenantProfilePatch): Promise<TenantRecord | null> {
+    const fields: Field[] = []
+    if (patch.name !== undefined) fields.push(['name', patch.name])
+    if (patch.plan !== undefined) fields.push(['plan', patch.plan])
+    if (patch.status !== undefined) fields.push(['status', patch.status])
+    if (patch.disabled !== undefined) fields.push(['disabled', patch.disabled])
+    if (patch.stripeCustomerId !== undefined) fields.push(['stripe_customer_id', patch.stripeCustomerId])
+    if (patch.stripeSubscriptionId !== undefined) fields.push(['stripe_subscription_id', patch.stripeSubscriptionId])
+    if (patch.accessUntil !== undefined) fields.push(['access_until', patch.accessUntil])
+    if (patch.notes !== undefined) fields.push(['notes', patch.notes])
+    const update = assignments(fields)
+    const parameters = [...update.parameters, tenantId]
+    const result = await this.db.query<TenantRow>(
+      `UPDATE wiseai_tenants SET ${update.sql} WHERE tenant_id = $${parameters.length} RETURNING ${TENANT_COLUMNS}`,
+      parameters,
+    )
+    const row = result.rows[0]
+    return row === undefined ? null : tenantRecord(row)
+  }
+
+  async createUserInTenant(input: {
+    readonly tenantId: string
+    readonly email: string
+    readonly passwordHash: string
+    readonly role: 'admin' | 'member'
+    readonly platformAdmin?: boolean
+  }): Promise<{ userId: string }> {
+    const userId = randomUUID()
+    try {
+      await this.db.query(
+        `INSERT INTO wiseai_users (user_id, tenant_id, email, password_hash, role, platform_admin)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [userId, input.tenantId, normalizeEmail(input.email), input.passwordHash, input.role, input.platformAdmin ?? false],
+      )
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new Error('An account with this email already exists in this tenant')
+      throw error
+    }
+    return { userId }
+  }
+
+  async listAccounts(tenantId: string): Promise<readonly TenantAccountRecord[]> {
+    const result = await this.db.query<AccountRow>(
+      `SELECT ${ACCOUNT_COLUMNS}
+         FROM wiseai_users AS u JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
+        WHERE u.tenant_id = $1
+        ORDER BY u.created_at, u.user_id`,
+      [tenantId],
+    )
+    return result.rows.map(accountRecord)
+  }
+
+  async listAllAccounts(): Promise<readonly TenantAccountRecord[]> {
+    const result = await this.db.query<AccountRow>(
+      `SELECT ${ACCOUNT_COLUMNS}
+         FROM wiseai_users AS u JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
+        ORDER BY u.created_at, u.user_id`,
+      [],
+    )
+    return result.rows.map(accountRecord)
+  }
+
+  async findAccountById(userId: string): Promise<TenantAccountRecord | null> {
+    const result = await this.db.query<AccountRow>(
+      `SELECT ${ACCOUNT_COLUMNS}
+         FROM wiseai_users AS u JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id
+        WHERE u.user_id = $1 LIMIT 1`,
+      [userId],
+    )
+    const row = result.rows[0]
+    return row === undefined ? null : accountRecord(row)
+  }
+
+  async updateAccount(userId: string, patch: TenantAccountPatch): Promise<TenantAccountRecord | null> {
+    const fields: Field[] = []
+    if (patch.role !== undefined) fields.push(['role', patch.role])
+    if (patch.disabled !== undefined) fields.push(['disabled', patch.disabled])
+    if (patch.passwordHash !== undefined) fields.push(['password_hash', patch.passwordHash])
+    if (patch.platformAdmin !== undefined) fields.push(['platform_admin', patch.platformAdmin])
+    const update = assignments(fields)
+    const parameters = [...update.parameters, userId]
+    const result = await this.db.query<AccountRow>(
+      `WITH updated AS (
+         UPDATE wiseai_users SET ${update.sql} WHERE user_id = $${parameters.length} RETURNING *
+       )
+       SELECT ${ACCOUNT_COLUMNS}
+         FROM updated AS u JOIN wiseai_tenants AS t ON t.tenant_id = u.tenant_id`,
+      parameters,
+    )
+    const row = result.rows[0]
+    return row === undefined ? null : accountRecord(row)
+  }
+
+  async recordLogin(userId: string): Promise<void> {
+    const bootstrapEmail = process.env.WISEAI_ADMIN_EMAIL?.trim().toLowerCase() ?? ''
+    await this.db.query(
+      `UPDATE wiseai_users
+          SET last_seen_at = now(), updated_at = now(),
+              platform_admin = platform_admin OR ($2 <> '' AND lower(email) = $2)
+        WHERE user_id = $1`,
+      [userId, bootstrapEmail],
+    )
+  }
+
+  async listSessions(filter: { readonly tenantId?: string; readonly activeOnly?: boolean } = {}): Promise<readonly TenantSessionListRecord[]> {
+    const conditions: string[] = []
+    const parameters: unknown[] = []
+    if (filter.tenantId !== undefined) {
+      parameters.push(filter.tenantId)
+      conditions.push(`s.tenant_id = $${parameters.length}`)
+    }
+    if (filter.activeOnly === true) conditions.push('s.expires_at > now() AND s.revoked_at IS NULL')
+    const where = conditions.length === 0 ? '' : ` WHERE ${conditions.join(' AND ')}`
+    const result = await this.db.query<SessionListRow>(
+      `SELECT ${SESSION_LIST_COLUMNS}
+         FROM wiseai_sessions AS s
+         JOIN wiseai_users AS u ON u.user_id = s.user_id
+         JOIN wiseai_tenants AS t ON t.tenant_id = s.tenant_id${where}
+        ORDER BY s.created_at DESC, s.session_id`,
+      parameters,
+    )
+    return result.rows.map(sessionListRecord)
+  }
+
+  async createSupportRequest(input: SupportRequestInput): Promise<SupportRequestRecord> {
+    const requestId = randomUUID()
+    const result = await this.db.query<SupportRow>(
+      `WITH inserted AS (
+         INSERT INTO wiseai_support_requests (request_id, tenant_id, user_id, email, subject, message, page_url)
+         SELECT $1, u.tenant_id, u.user_id, u.email, $3, $4, $5
+           FROM wiseai_users AS u
+          WHERE u.user_id = $2 AND u.tenant_id = $6 AND NOT u.disabled
+         RETURNING *
+       )
+       SELECT ${SUPPORT_COLUMNS}
+         FROM inserted AS r JOIN wiseai_tenants AS t ON t.tenant_id = r.tenant_id`,
+      [requestId, input.userId, input.subject, input.message, input.pageUrl, input.tenantId],
+    )
+    const row = result.rows[0]
+    if (row === undefined) throw new Error('Support request rejected')
+    return supportRecord(row)
+  }
+
+  async listSupportRequests(filter: { readonly status?: SupportRequestRecord['status']; readonly tenantId?: string; readonly limit?: number } = {}): Promise<readonly SupportRequestRecord[]> {
+    const conditions: string[] = []
+    const parameters: unknown[] = []
+    if (filter.status !== undefined) {
+      parameters.push(filter.status)
+      conditions.push(`r.status = $${parameters.length}`)
+    }
+    if (filter.tenantId !== undefined) {
+      parameters.push(filter.tenantId)
+      conditions.push(`r.tenant_id = $${parameters.length}`)
+    }
+    const where = conditions.length === 0 ? '' : ` WHERE ${conditions.join(' AND ')}`
+    let limit = ''
+    if (filter.limit !== undefined) {
+      parameters.push(filter.limit)
+      limit = ` LIMIT $${parameters.length}`
+    }
+    const result = await this.db.query<SupportRow>(
+      `SELECT ${SUPPORT_COLUMNS}
+         FROM wiseai_support_requests AS r JOIN wiseai_tenants AS t ON t.tenant_id = r.tenant_id${where}
+        ORDER BY r.created_at DESC, r.request_id${limit}`,
+      parameters,
+    )
+    return result.rows.map(supportRecord)
+  }
+
+  async updateSupportRequest(requestId: string, patch: SupportRequestPatch): Promise<SupportRequestRecord | null> {
+    const fields: Field[] = []
+    if (patch.status !== undefined) fields.push(['status', patch.status])
+    if (patch.priority !== undefined) fields.push(['priority', patch.priority])
+    if (patch.adminNote !== undefined) fields.push(['admin_note', patch.adminNote])
+    const update = assignments(fields)
+    const parameters = [...update.parameters, requestId]
+    const result = await this.db.query<SupportRow>(
+      `WITH updated AS (
+         UPDATE wiseai_support_requests SET ${update.sql} WHERE request_id = $${parameters.length} RETURNING *
+       )
+       SELECT ${SUPPORT_COLUMNS}
+         FROM updated AS r JOIN wiseai_tenants AS t ON t.tenant_id = r.tenant_id`,
+      parameters,
+    )
+    const row = result.rows[0]
+    return row === undefined ? null : supportRecord(row)
+  }
+
+  async recordSalesEvent(input: SalesEventInput): Promise<void> {
+    await this.db.query(
+      `INSERT INTO wiseai_sales_events
+         (event_id, event_type, tenant_id, customer_id, subscription_id, amount_total, currency, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [input.eventId, input.eventType, input.tenantId, input.customerId, input.subscriptionId, input.amountTotal, input.currency, input.status],
+    )
+  }
+
+  async listSalesEvents(limit?: number): Promise<readonly SalesEventRecord[]> {
+    const parameters: unknown[] = []
+    let sql = `SELECT ${SALES_COLUMNS} FROM wiseai_sales_events ORDER BY created_at DESC, event_id`
+    if (limit !== undefined) {
+      parameters.push(limit)
+      sql += ` LIMIT $${parameters.length}`
+    }
+    const result = await this.db.query<SalesRow>(sql, parameters)
+    return result.rows.map(salesRecord)
   }
 }

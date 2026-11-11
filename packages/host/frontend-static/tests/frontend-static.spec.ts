@@ -30,7 +30,7 @@ afterEach(async () => {
 })
 
 /** Write a dist fixture and the authenticated Web rows, then boot them through the real Loader. */
-async function loadComposition(): Promise<Context> {
+async function loadComposition(options: { landingPage?: boolean } = {}): Promise<Context> {
   root = await mkdtemp(join(tmpdir(), 'dsh-frontend-static-'))
   const dist = join(root, 'dist')
   await mkdir(dist)
@@ -42,6 +42,8 @@ async function loadComposition(): Promise<Context> {
   await writeFile(join(dist, 'manifest.webmanifest'), '{}')
   await writeFile(join(dist, 'icon-192.png'), 'PNG')
   await mkdir(join(dist, 'empty'))
+  const landingPage = join(root, 'landing.html')
+  await writeFile(landingPage, '<!doctype html><html><body>public landing</body></html>')
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
     "- name: '@deepseek-ai/dsh-credentials-local'",
@@ -57,6 +59,7 @@ async function loadComposition(): Promise<Context> {
     "  name: '@deepseek-ai/dsh-host-frontend-static'",
     '  config:',
     `    distIndex: '${distIndex}'`,
+    ...options.landingPage === true ? [`    landingPage: '${landingPage}'`] : [],
     '',
   ].join('\n'))
 
@@ -228,6 +231,30 @@ describe('real Loader composition', () => {
     await frontendEntry!.fiber?.dispose()
     expect((await request(port, '/no/such/route')).status).toBe(404)
     expect(() => server.registerFallback(() => {})).not.toThrow()
+  })
+
+  it('serves the configured landing document to signed-out index visitors', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition({ landingPage: true })
+    const port = loaded.webServer.port
+    const landing = '<!doctype html><html><body>public landing</body></html>'
+    for (const path of ['/', '/index.html', '/?view=pricing']) {
+      expect(await request(port, path)).toEqual({ status: 200, type: 'text/html; charset=utf-8', body: landing })
+    }
+    expect(await request(port, '/', { method: 'HEAD' })).toEqual({ status: 200, type: 'text/html; charset=utf-8', body: '' })
+    // Assets keep their ordinary public contract.
+    expect(await request(port, '/app.js')).toMatchObject({ status: 200, body: 'export {}' })
+
+    // The browser token exchange still admits the application index, which
+    // replaces the landing document for that browser.
+    const launchUrl = loaded.connection.authenticatedUrl(`http://127.0.0.1:${String(port)}`)
+    const exchange = await fetch(launchUrl, { redirect: 'manual' })
+    expect(exchange.status).toBe(303)
+    const cookie = exchange.headers.get('set-cookie')?.split(';', 1)[0]
+    if (cookie === undefined) throw new Error('landing test did not receive a browser cookie')
+    const app = await request(port, '/', { headers: { cookie } })
+    expect(app.status).toBe(200)
+    expect(app.body).toContain('shell')
+    expect(app.body).not.toContain('public landing')
   })
 
   it('answers in-process reads for the given Peer without browser authentication', { timeout: 60_000 }, async () => {

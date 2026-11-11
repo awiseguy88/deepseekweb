@@ -1,0 +1,488 @@
+/**
+ * JSON HTTP surface for the hosted WiseAI administration page and the in-app
+ * member support intake. Both routers are pure `Request -> Response` functions
+ * so the desktop host and the unit suites exercise the same routing and
+ * validation; the exported `handle*` adapters bind them to the Node server.
+ *
+ * @module @deepseek-ai/dsh-api-tenant-auth/admin-http
+ */
+
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { hashPassword } from './password.ts'
+import { resolveSession } from './session-tokens.ts'
+import type {
+  SupportRequestPatch,
+  SupportRequestRecord,
+  TenantAccountPatch,
+  TenantAccountRecord,
+  TenantAuthStore,
+  TenantProfilePatch,
+  TenantRecord,
+  TenantSessionListRecord,
+  TenantSessionRecord,
+  TenantUserRecord,
+} from './types.ts'
+
+const COOKIE = 'wiseai_session'
+const MAX_BODY_BYTES = 1_048_576
+const MAX_PASSWORD_BYTES = 1024
+const MIN_PASSWORD_LENGTH = 12
+const MAX_EMAIL_LENGTH = 320
+
+const TENANT_STATUSES = new Set<string>(['active', 'trialing', 'past_due', 'canceled', 'disabled'])
+const SUPPORT_STATUSES = new Set<string>(['open', 'in_progress', 'closed'])
+const SUPPORT_PRIORITIES = new Set<string>(['low', 'normal', 'high'])
+const ROLES = new Set<string>(['admin', 'member'])
+
+/** One authenticated caller resolved from the browser session cookie. */
+interface TenantPrincipal {
+  readonly user: TenantUserRecord
+  readonly session: TenantSessionRecord
+}
+
+/** A tenant profile patch being assembled from validated request fields. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  })
+}
+
+function invalidRequest(): Response {
+  return json({ error: 'invalid_request' }, 400)
+}
+
+function notFound(): Response {
+  return json({ error: 'not_found' }, 404)
+}
+
+function cookieValue(request: Request): string | undefined {
+  const value = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))
+  return value === undefined ? undefined : decodeURIComponent(value.slice(COOKIE.length + 1))
+}
+
+/**
+ * Resolve the signed-in account behind the `wiseai_session` cookie.
+ * @param store - tenant identity store.
+ * @param request - incoming browser request.
+ * @returns the enabled account and its active session, or null when unauthenticated.
+ */
+async function authenticate(store: TenantAuthStore, request: Request): Promise<TenantPrincipal | null> {
+  const token = cookieValue(request)
+  if (token === undefined) return null
+  const session = await resolveSession(store, token)
+  if (session === null) return null
+  const user = await store.findUserById(session.userId)
+  if (user === null || user.disabled || user.tenantId !== session.tenantId) return null
+  return { user, session }
+}
+
+/**
+ * Resolve the platform operator behind the session cookie.
+ * @param store - tenant identity store.
+ * @param request - incoming browser request.
+ * @returns the platform administrator, or null when the caller is unauthenticated, disabled, or not a platform operator.
+ */
+export async function resolvePlatformAdmin(store: TenantAuthStore, request: Request): Promise<TenantUserRecord | null> {
+  const principal = await authenticate(store, request)
+  return principal !== null && principal.user.platformAdmin ? principal.user : null
+}
+
+/**
+ * Resolve any enabled signed-in account behind the session cookie.
+ * @param store - tenant identity store.
+ * @param request - incoming browser request.
+ * @returns the account together with its session, or null when unauthenticated.
+ */
+export async function resolveTenantAccount(
+  store: TenantAuthStore,
+  request: Request,
+): Promise<{ user: TenantUserRecord; session: TenantSessionRecord } | null> {
+  return authenticate(store, request)
+}
+
+/** A decoded JSON body, or the status and code the router must answer with. */
+type JsonBody =
+  | { readonly kind: 'value'; readonly value: unknown }
+  | { readonly kind: 'invalid'; readonly status: 400 | 413; readonly error: 'invalid_request' | 'request_too_large' }
+
+/** Read a bounded JSON body without trusting its declared length. */
+async function readJsonBody(request: Request): Promise<JsonBody> {
+  const declared = request.headers.get('content-length')
+  if (declared !== null && Number(declared) > MAX_BODY_BYTES) return { kind: 'invalid', status: 413, error: 'request_too_large' }
+  const bytes = await request.arrayBuffer()
+  if (bytes.byteLength > MAX_BODY_BYTES) return { kind: 'invalid', status: 413, error: 'request_too_large' }
+  try {
+    return { kind: 'value', value: JSON.parse(new TextDecoder().decode(bytes)) }
+  } catch {
+    // A body that is not JSON is a malformed request, not a server failure.
+    return { kind: 'invalid', status: 400, error: 'invalid_request' }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function trimmedString(value: unknown, min: number, max: number): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length >= min && trimmed.length <= max ? trimmed : null
+}
+
+/** Emails are compared and stored folded, matching the store's uniqueness rules. */
+function normalizeEmail(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const email = value.trim().toLowerCase()
+  return email.length > 0 && email.length <= MAX_EMAIL_LENGTH && email.includes('@') ? email : null
+}
+
+function validPassword(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= MIN_PASSWORD_LENGTH && Buffer.byteLength(value) <= MAX_PASSWORD_BYTES
+}
+
+function isTenantStatus(value: unknown): value is TenantRecord['status'] {
+  return typeof value === 'string' && TENANT_STATUSES.has(value)
+}
+
+function isSupportStatus(value: unknown): value is SupportRequestRecord['status'] {
+  return typeof value === 'string' && SUPPORT_STATUSES.has(value)
+}
+
+function isSupportPriority(value: unknown): value is SupportRequestRecord['priority'] {
+  return typeof value === 'string' && SUPPORT_PRIORITIES.has(value)
+}
+
+function isRole(value: unknown): value is 'admin' | 'member' {
+  return typeof value === 'string' && ROLES.has(value)
+}
+
+/** Read a JSON body, mapping malformed input to its typed error response. */
+async function readBody(request: Request): Promise<{ readonly value: Record<string, unknown> } | { readonly response: Response }> {
+  const body = await readJsonBody(request)
+  if (body.kind === 'invalid') return { response: json({ error: body.error }, body.status) }
+  if (!isRecord(body.value)) return { response: invalidRequest() }
+  return { value: body.value }
+}
+
+async function overview(store: TenantAuthStore): Promise<Response> {
+  const [tenants, accounts, openRequests, activeSessions] = await Promise.all([
+    store.listTenants(),
+    store.listAllAccounts(),
+    store.listSupportRequests({ status: 'open' }),
+    store.listSessions({ activeOnly: true }),
+  ])
+  return json({
+    customers: tenants.length,
+    activeCustomers: tenants.filter(tenant => !tenant.disabled && tenant.status === 'active').length,
+    users: accounts.length,
+    openSupport: openRequests.length,
+    activeSessions: activeSessions.length,
+  })
+}
+
+async function listCustomers(store: TenantAuthStore): Promise<Response> {
+  const [tenants, accounts] = await Promise.all([store.listTenants(), store.listAllAccounts()])
+  const stats = new Map<string, { userCount: number; lastSeenAt: Date | null }>()
+  for (const account of accounts) {
+    const entry = stats.get(account.tenantId) ?? { userCount: 0, lastSeenAt: null }
+    entry.userCount += 1
+    if (account.lastSeenAt !== null && (entry.lastSeenAt === null || account.lastSeenAt > entry.lastSeenAt)) {
+      entry.lastSeenAt = account.lastSeenAt
+    }
+    stats.set(account.tenantId, entry)
+  }
+  const customers = tenants.map(tenant => ({ ...tenant, ...(stats.get(tenant.tenantId) ?? { userCount: 0, lastSeenAt: null }) }))
+  return json({ customers })
+}
+
+async function createCustomer(store: TenantAuthStore, request: Request): Promise<Response> {
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const name = trimmedString(body.value.name, 1, 200)
+  const plan = trimmedString(body.value.plan, 1, 64)
+  const adminEmail = normalizeEmail(body.value.adminEmail)
+  const password = body.value.password
+  if (name === null || plan === null || adminEmail === null || !validPassword(password)) return invalidRequest()
+  if (await store.findUserByEmail(adminEmail) !== null) return json({ error: 'conflict' }, 409)
+  const created = await store.createTenant({ name, plan, adminEmail, adminPasswordHash: await hashPassword(password) })
+  return json(created, 201)
+}
+
+async function customerDetail(store: TenantAuthStore, tenantId: string): Promise<Response> {
+  const customer = await store.findTenantById(tenantId)
+  if (customer === null) return notFound()
+  const [users, sessions] = await Promise.all([store.listAccounts(tenantId), store.listSessions({ tenantId })])
+  return json({ customer, users, sessions })
+}
+
+async function updateCustomer(store: TenantAuthStore, tenantId: string, request: Request): Promise<Response> {
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const fields = body.value
+  const patch: Mutable<TenantProfilePatch> = {}
+  if (fields.name !== undefined) {
+    const name = trimmedString(fields.name, 1, 200)
+    if (name === null) return invalidRequest()
+    patch.name = name
+  }
+  if (fields.plan !== undefined) {
+    const plan = trimmedString(fields.plan, 1, 64)
+    if (plan === null) return invalidRequest()
+    patch.plan = plan
+  }
+  if (fields.status !== undefined) {
+    if (!isTenantStatus(fields.status)) return invalidRequest()
+    patch.status = fields.status
+  }
+  if (fields.disabled !== undefined) {
+    if (typeof fields.disabled !== 'boolean') return invalidRequest()
+    patch.disabled = fields.disabled
+  }
+  if (fields.accessUntil !== undefined) {
+    if (fields.accessUntil === null) patch.accessUntil = null
+    else if (typeof fields.accessUntil === 'string') {
+      const accessUntil = new Date(fields.accessUntil)
+      if (Number.isNaN(accessUntil.getTime())) return invalidRequest()
+      patch.accessUntil = accessUntil
+    } else return invalidRequest()
+  }
+  if (fields.notes !== undefined) {
+    if (typeof fields.notes !== 'string') return invalidRequest()
+    patch.notes = fields.notes
+  }
+  if (fields.stripeCustomerId !== undefined) {
+    if (fields.stripeCustomerId !== null && typeof fields.stripeCustomerId !== 'string') return invalidRequest()
+    patch.stripeCustomerId = fields.stripeCustomerId
+  }
+  if (fields.stripeSubscriptionId !== undefined) {
+    if (fields.stripeSubscriptionId !== null && typeof fields.stripeSubscriptionId !== 'string') return invalidRequest()
+    patch.stripeSubscriptionId = fields.stripeSubscriptionId
+  }
+  const customer = await store.updateTenant(tenantId, patch)
+  return customer === null ? notFound() : json({ customer })
+}
+
+async function addCustomerUser(store: TenantAuthStore, tenantId: string, request: Request): Promise<Response> {
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const email = normalizeEmail(body.value.email)
+  const role = body.value.role
+  const password = body.value.password
+  if (email === null || !isRole(role) || !validPassword(password)) return invalidRequest()
+  if (await store.findUserByEmail(email) !== null) return json({ error: 'conflict' }, 409)
+  const created = await store.createUserInTenant({ tenantId, email, passwordHash: await hashPassword(password), role })
+  return json(created, 201)
+}
+
+async function updateUser(store: TenantAuthStore, actor: TenantUserRecord, userId: string, request: Request): Promise<Response> {
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const fields = body.value
+  const patch: Mutable<TenantAccountPatch> = {}
+  if (fields.disabled !== undefined) {
+    if (typeof fields.disabled !== 'boolean') return invalidRequest()
+    if (fields.disabled && userId === actor.userId) return invalidRequest()
+    patch.disabled = fields.disabled
+  }
+  if (fields.role !== undefined) {
+    if (!isRole(fields.role)) return invalidRequest()
+    patch.role = fields.role
+  }
+  if (fields.platformAdmin !== undefined) {
+    if (typeof fields.platformAdmin !== 'boolean') return invalidRequest()
+    patch.platformAdmin = fields.platformAdmin
+  }
+  if (fields.password !== undefined) {
+    if (!validPassword(fields.password)) return invalidRequest()
+    patch.passwordHash = await hashPassword(fields.password)
+  }
+  const user: TenantAccountRecord | null = await store.updateAccount(userId, patch)
+  return user === null ? notFound() : json({ user })
+}
+
+async function listSessions(store: TenantAuthStore, url: URL): Promise<Response> {
+  const tenantId = url.searchParams.get('tenantId')
+  const sessions: readonly TenantSessionListRecord[] = await store.listSessions(tenantId === null || tenantId === '' ? {} : { tenantId })
+  return json({ sessions })
+}
+
+async function revokeSession(store: TenantAuthStore, sessionId: string): Promise<Response> {
+  await store.revokeSession(sessionId)
+  return json({ ok: true })
+}
+
+async function listSupportRequests(store: TenantAuthStore, url: URL): Promise<Response> {
+  const status = url.searchParams.get('status')
+  if (status !== null && status !== '' && !isSupportStatus(status)) return invalidRequest()
+  return json({ requests: await store.listSupportRequests(status === null || status === '' ? {} : { status }) })
+}
+
+async function updateSupportRequest(store: TenantAuthStore, requestId: string, request: Request): Promise<Response> {
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const fields = body.value
+  const patch: Mutable<SupportRequestPatch> = {}
+  if (fields.status !== undefined) {
+    if (!isSupportStatus(fields.status)) return invalidRequest()
+    patch.status = fields.status
+  }
+  if (fields.priority !== undefined) {
+    if (!isSupportPriority(fields.priority)) return invalidRequest()
+    patch.priority = fields.priority
+  }
+  if (fields.adminNote !== undefined) {
+    if (typeof fields.adminNote !== 'string') return invalidRequest()
+    patch.adminNote = fields.adminNote
+  }
+  const updated = await store.updateSupportRequest(requestId, patch)
+  return updated === null ? notFound() : json({ request: updated })
+}
+
+async function sales(store: TenantAuthStore): Promise<Response> {
+  return json({ configured: Boolean(process.env.STRIPE_SECRET_KEY), events: await store.listSalesEvents(100) })
+}
+
+/**
+ * Route one `/admin/api/*` request as a platform administrator.
+ * @param store - tenant identity store.
+ * @param request - incoming JSON request.
+ * @returns the JSON response; 401 for an absent session, 403 for a non-operator account, 404 for an unknown route.
+ */
+export async function adminApiResponse(store: TenantAuthStore, request: Request): Promise<Response> {
+  const principal = await authenticate(store, request)
+  if (principal === null) return json({ error: 'unauthenticated' }, 401)
+  if (!principal.user.platformAdmin) return json({ error: 'forbidden' }, 403)
+  const url = new URL(request.url, 'http://localhost')
+  const segments = url.pathname.split('/').filter(segment => segment.length > 0)
+  const method = request.method
+  const resource = segments[2]
+  const rest = segments.slice(3)
+  if (segments[0] !== 'admin' || segments[1] !== 'api') return notFound()
+  if (resource === 'overview' && rest.length === 0 && method === 'GET') return overview(store)
+  if (resource === 'customers' && rest.length === 0) {
+    if (method === 'GET') return listCustomers(store)
+    if (method === 'POST') return createCustomer(store, request)
+  }
+  if (resource === 'customers' && rest.length === 1 && rest[0] !== undefined) {
+    const tenantId = decodeURIComponent(rest[0])
+    if (method === 'GET') return customerDetail(store, tenantId)
+    if (method === 'POST') return updateCustomer(store, tenantId, request)
+  }
+  if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'users' && method === 'POST') {
+    return addCustomerUser(store, decodeURIComponent(rest[0]), request)
+  }
+  if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
+    return updateUser(store, principal.user, decodeURIComponent(rest[0]), request)
+  }
+  if (resource === 'sessions' && rest.length === 0 && method === 'GET') return listSessions(store, url)
+  if (resource === 'sessions' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'revoke' && method === 'POST') {
+    return revokeSession(store, decodeURIComponent(rest[0]))
+  }
+  if (resource === 'support' && rest.length === 0 && method === 'GET') return listSupportRequests(store, url)
+  if (resource === 'support' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
+    return updateSupportRequest(store, decodeURIComponent(rest[0]), request)
+  }
+  if (resource === 'sales' && rest.length === 0 && method === 'GET') return sales(store)
+  return notFound()
+}
+
+/**
+ * Route one member support request from the in-app Need Help control.
+ * @param store - tenant identity store.
+ * @param request - incoming JSON request.
+ * @returns 201 with the new request id, 400 for invalid fields, 401 for an absent session, 404 for other routes.
+ */
+export async function supportApiResponse(store: TenantAuthStore, request: Request): Promise<Response> {
+  const url = new URL(request.url, 'http://localhost')
+  if (url.pathname !== '/support/requests' || request.method !== 'POST') return notFound()
+  const principal = await authenticate(store, request)
+  if (principal === null) return json({ error: 'unauthenticated' }, 401)
+  const body = await readBody(request)
+  if ('response' in body) return body.response
+  const subject = trimmedString(body.value.subject, 1, 200)
+  const message = trimmedString(body.value.message, 1, 5000)
+  if (subject === null || message === null) return invalidRequest()
+  let pageUrl = ''
+  if (body.value.pageUrl !== undefined) {
+    if (typeof body.value.pageUrl !== 'string') return invalidRequest()
+    pageUrl = body.value.pageUrl.trim()
+    if (pageUrl.length > 2048) return invalidRequest()
+  }
+  const created = await store.createSupportRequest({
+    tenantId: principal.user.tenantId,
+    userId: principal.user.userId,
+    subject,
+    message,
+    pageUrl,
+  })
+  return json({ requestId: created.requestId }, 201)
+}
+
+/** Read the bounded Node request body, answering 413 itself when it is too large. */
+async function readNodeBody(request: IncomingMessage, response: ServerResponse): Promise<Buffer | null> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += bytes.length
+    if (size > MAX_BODY_BYTES) {
+      response.writeHead(413, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      response.end(JSON.stringify({ error: 'request_too_large' }))
+      return null
+    }
+    chunks.push(bytes)
+  }
+  return Buffer.concat(chunks)
+}
+
+/** Convert the raw request and its already-read body into the fetch Request surface. */
+function nodeToRequest(request: IncomingMessage, body: Buffer): Request {
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value)
+  }
+  const url = new URL(request.url ?? '/admin/api', `http://${request.headers.host ?? 'localhost'}`)
+  return new Request(url, {
+    method: request.method ?? 'GET',
+    headers,
+    ...(body.length === 0 ? {} : { body: body.toString('utf8') }),
+  })
+}
+
+/** Copy the fetch Response onto the Node server response. */
+async function writeNodeResponse(response: ServerResponse, result: Response): Promise<void> {
+  const headers: Record<string, string> = {}
+  result.headers.forEach((value, name) => { headers[name] = value })
+  response.writeHead(result.status, headers)
+  const body = Buffer.from(await result.arrayBuffer())
+  response.end(body.byteLength === 0 ? undefined : body)
+}
+
+/**
+ * Adapt a Node HTTP request for the `/admin/api/*` router.
+ * @param store - tenant identity store.
+ * @param request - incoming Node request.
+ * @param response - outgoing Node response.
+ * @returns when the response has been written.
+ */
+export async function handleAdminApi(store: TenantAuthStore, request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readNodeBody(request, response)
+  if (body === null) return
+  await writeNodeResponse(response, await adminApiResponse(store, nodeToRequest(request, body)))
+}
+
+/**
+ * Adapt a Node HTTP request for the member support router.
+ * @param store - tenant identity store.
+ * @param request - incoming Node request.
+ * @param response - outgoing Node response.
+ * @returns when the response has been written.
+ */
+export async function handleSupportApi(store: TenantAuthStore, request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readNodeBody(request, response)
+  if (body === null) return
+  await writeNodeResponse(response, await supportApiResponse(store, nodeToRequest(request, body)))
+}

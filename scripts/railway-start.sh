@@ -15,6 +15,10 @@ if [ "${WISEAI_AUTH_REQUIRED:-0}" = "1" ]; then
     echo 'WISEAI_AUTH_REQUIRED=1 requires WISEAI_SESSION_SECRET (at least 32 characters).' >&2
     exit 64
   fi
+  # Publish the marketing document as the signed-out home page. The image copies
+  # the repository at /app, so the default needs no Railway variable.
+  : "${WISEAI_LANDING_PAGE:=/app/wiseai-immersive.html}"
+  export WISEAI_LANDING_PAGE
 fi
 
 if [ -n "${DSH_WEB_PUBLIC_URL:-}" ]; then

@@ -6,6 +6,40 @@ export interface TenantUserRecord {
   readonly role: 'admin' | 'member'
   readonly tenantId: string
   readonly disabled: boolean
+  /** Platform operator allowed to manage every tenant from the hosted admin surface. */
+  readonly platformAdmin: boolean
+  readonly createdAt: Date
+  readonly lastSeenAt: Date | null
+}
+
+/** One customer tenant with its billing and access state. */
+export interface TenantRecord {
+  readonly tenantId: string
+  readonly name: string
+  /** Commercial plan label, for example `free`, `pro`, or `team`. */
+  readonly plan: string
+  /** Access state driven by the operator or the Stripe subscription webhook. */
+  readonly status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'disabled'
+  readonly disabled: boolean
+  readonly stripeCustomerId: string | null
+  readonly stripeSubscriptionId: string | null
+  readonly accessUntil: Date | null
+  readonly notes: string
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+/** One user row joined with its tenant label, as rendered by the admin lists. */
+export interface TenantAccountRecord {
+  readonly userId: string
+  readonly tenantId: string
+  readonly tenantName: string
+  readonly email: string
+  readonly role: 'admin' | 'member'
+  readonly platformAdmin: boolean
+  readonly disabled: boolean
+  readonly createdAt: Date
+  readonly lastSeenAt: Date | null
 }
 
 /** A server-issued session bound to one user and tenant. */
@@ -17,6 +51,102 @@ export interface TenantSessionRecord {
   readonly revokedAt: Date | null
 }
 
+/** A listed session joined with its user and tenant labels. */
+export interface TenantSessionListRecord {
+  readonly sessionId: string
+  readonly userId: string
+  readonly tenantId: string
+  readonly email: string
+  readonly tenantName: string
+  readonly expiresAt: Date
+  readonly createdAt: Date
+  readonly revokedAt: Date | null
+}
+
+/** State of a customer support request raised from the in-app Need Help control. */
+export type SupportRequestStatus = 'open' | 'in_progress' | 'closed'
+
+/** Priority assigned by the operator while triaging the support inbox. */
+export type SupportRequestPriority = 'low' | 'normal' | 'high'
+
+/** One support request joined with the customer that raised it. */
+export interface SupportRequestRecord {
+  readonly requestId: string
+  readonly tenantId: string
+  readonly tenantName: string
+  readonly userId: string
+  readonly email: string
+  readonly subject: string
+  readonly message: string
+  readonly pageUrl: string
+  readonly status: SupportRequestStatus
+  readonly priority: SupportRequestPriority
+  readonly adminNote: string
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+/** One Stripe webhook fact retained for the admin sales ledger. */
+export interface SalesEventRecord {
+  readonly eventId: string
+  readonly eventType: string
+  readonly tenantId: string | null
+  readonly customerId: string | null
+  readonly subscriptionId: string | null
+  readonly amountTotal: number | null
+  readonly currency: string | null
+  readonly status: string | null
+  readonly createdAt: Date
+}
+
+/** Fields an operator may change on a tenant profile. */
+export interface TenantProfilePatch {
+  readonly name?: string
+  readonly plan?: string
+  readonly status?: TenantRecord['status']
+  readonly disabled?: boolean
+  readonly stripeCustomerId?: string | null
+  readonly stripeSubscriptionId?: string | null
+  readonly accessUntil?: Date | null
+  readonly notes?: string
+}
+
+/** Fields an operator may change on one account. */
+export interface TenantAccountPatch {
+  readonly role?: 'admin' | 'member'
+  readonly disabled?: boolean
+  readonly passwordHash?: string
+  readonly platformAdmin?: boolean
+}
+
+/** Input accepted from a signed-in customer raising a support request. */
+export interface SupportRequestInput {
+  readonly tenantId: string
+  readonly userId: string
+  readonly subject: string
+  readonly message: string
+  readonly pageUrl: string
+}
+
+/** Fields an operator may change while triaging one support request. */
+export interface SupportRequestPatch {
+  readonly status?: SupportRequestStatus
+  readonly priority?: SupportRequestPriority
+  readonly adminNote?: string
+}
+
+/** Connection input for a Stripe webhook fact. */
+export interface SalesEventInput {
+  readonly eventId: string
+  readonly eventType: string
+  readonly tenantId: string | null
+  readonly customerId: string | null
+  readonly subscriptionId: string | null
+  readonly amountTotal: number | null
+  readonly currency: string | null
+  readonly status: string | null
+}
+
 /** Namespaced filesystem roots; callers must resolve these from the authenticated tenant. */
 export interface TenantRoots {
   readonly root: string
@@ -26,7 +156,11 @@ export interface TenantRoots {
   readonly failures: string
 }
 
-/** Minimal persistence seam for a future Postgres-backed implementation. */
+/**
+ * Persistence seam for tenant identity plus the hosted-admin extensions.
+ * Every method resolves the tenant from a trusted server-side identity; no
+ * caller may pass a browser-supplied tenant id.
+ */
 export interface TenantAuthStore {
   createMember(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }>
   createAdmin(email: string, passwordHash: string): Promise<{ userId: string; tenantId: string }>
@@ -37,6 +171,38 @@ export interface TenantAuthStore {
   revokeSession(sessionId: string): Promise<void>
   listUsers(tenantId: string): Promise<readonly TenantUserRecord[]>
   setUserDisabled(tenantId: string, userId: string, disabled: boolean): Promise<void>
+
+  /** Create a customer tenant together with its first administrator. */
+  createTenant(input: {
+    readonly name: string
+    readonly plan: string
+    readonly adminEmail: string
+    readonly adminPasswordHash: string
+    readonly platformAdmin?: boolean
+  }): Promise<{ tenantId: string; userId: string }>
+  findTenantById(tenantId: string): Promise<TenantRecord | null>
+  listTenants(): Promise<readonly TenantRecord[]>
+  updateTenant(tenantId: string, patch: TenantProfilePatch): Promise<TenantRecord | null>
+  /** Add one account to an existing tenant. Throws on a duplicate tenant-local email. */
+  createUserInTenant(input: {
+    readonly tenantId: string
+    readonly email: string
+    readonly passwordHash: string
+    readonly role: 'admin' | 'member'
+    readonly platformAdmin?: boolean
+  }): Promise<{ userId: string }>
+  listAccounts(tenantId: string): Promise<readonly TenantAccountRecord[]>
+  listAllAccounts(): Promise<readonly TenantAccountRecord[]>
+  findAccountById(userId: string): Promise<TenantAccountRecord | null>
+  updateAccount(userId: string, patch: TenantAccountPatch): Promise<TenantAccountRecord | null>
+  /** Mark a user as recently active and grant platform-operator rights to the bootstrap email. */
+  recordLogin(userId: string): Promise<void>
+  listSessions(filter?: { readonly tenantId?: string; readonly activeOnly?: boolean }): Promise<readonly TenantSessionListRecord[]>
+  createSupportRequest(input: SupportRequestInput): Promise<SupportRequestRecord>
+  listSupportRequests(filter?: { readonly status?: SupportRequestStatus; readonly tenantId?: string; readonly limit?: number }): Promise<readonly SupportRequestRecord[]>
+  updateSupportRequest(requestId: string, patch: SupportRequestPatch): Promise<SupportRequestRecord | null>
+  recordSalesEvent(input: SalesEventInput): Promise<void>
+  listSalesEvents(limit?: number): Promise<readonly SalesEventRecord[]>
 }
 
 /** Resolve tenant-owned directories from a trusted server-side identity. */

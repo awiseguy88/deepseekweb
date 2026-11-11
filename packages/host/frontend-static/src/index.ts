@@ -31,14 +31,21 @@ export const name = 'frontend-static'
 /** Services required before the authenticated fallback seat can be claimed. */
 export const inject = ['webServer', 'connection']
 
-/** Plugin config: the dist anchor. */
+/** Plugin config: the dist anchor and the optional public landing document. */
 export interface Config {
   /** Absolute path of index.html inside the dist root. */
   distIndex: string
+  /**
+   * Absolute path of a public marketing document served for unauthenticated
+   * index requests. Hosted deployments use it as the sign-out home page; the
+   * authorized application index stays the only content behind auth.
+   */
+  landingPage?: string
 }
 
 export const Config: z<Config> = z.object({
   distIndex: z.string().required(),
+  landingPage: z.string(),
 })
 
 const HTML_MIME = 'text/html; charset=utf-8'
@@ -65,6 +72,17 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
   'ENOTDIR',
 ])
 
+/** Paths that name the application document rather than an ordinary asset. */
+function isDocumentPath(pathname: string): boolean {
+  return pathname === '/' || pathname === '/index.html'
+}
+
+/** The public landing document answer; like the index it is never cached. */
+function landingResponse(html: string, method: string): Response {
+  const headers = { 'content-type': HTML_MIME, 'cache-control': 'no-store' }
+  return method === 'HEAD' ? new Response(null, { status: 200, headers }) : new Response(html, { status: 200, headers })
+}
+
 /** A Response body that is `bytes` itself, without the copy a buffer body gets. */
 function bytesBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -86,6 +104,8 @@ function bytesBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
  * the response to send instead of the index, or undefined to serve it.
  * @param renderIndex - turns the raw index.html body into the served document
  * for the dist root and configured index path.
+ * @param readLandingPage - resolves the public landing document to serve
+ * instead of the unauthorised index response; undefined keeps the refusal.
  * @returns the dist response; a HEAD response carries the GET status and
  * headers without a body. A file other than the index carries
  * `cache-control: no-cache` and a weak ETag from a SHA-1 of its bytes, and a
@@ -95,8 +115,10 @@ async function serveStatic(
   request: Request, distRoot: string, distIndex: string,
   authorizeIndex: () => Response | PeerScope | undefined,
   renderIndex: (html: string, admittedPeer?: PeerScope) => string,
+  readLandingPage?: () => Promise<string | undefined>,
 ): Promise<Response> {
-  const target = resolve(normalize(join(distRoot, decodeURIComponent(new URL(request.url).pathname))))
+  const pathname = new URL(request.url).pathname
+  const target = resolve(normalize(join(distRoot, decodeURIComponent(pathname))))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
   // it. `sep`, not '/': resolve() emits backslash paths on Windows, where a '/'
   // suffix would reject every legitimate subpath as traversal.
@@ -106,7 +128,16 @@ async function serveStatic(
   try {
     if (target === distRoot || target === distIndex) {
       const admission = authorizeIndex()
-      if (admission instanceof Response) return admission
+      if (admission instanceof Response) {
+        // The signed-out home page is the deployment's public landing document;
+        // every other index refusal (and every non-document path) still uses
+        // Connection's authenticated-index contract.
+        if (admission.status === 401 && readLandingPage !== undefined && isDocumentPath(pathname)) {
+          const landing = await readLandingPage()
+          if (landing !== undefined) return landingResponse(landing, request.method)
+        }
+        return admission
+      }
       const admittedPeer = admission
       body = renderIndex(await readFile(distIndex, 'utf8'), admittedPeer)
       headers = { 'content-type': HTML_MIME }
@@ -135,6 +166,17 @@ async function serveStatic(
 export function apply(ctx: Context, config: Config): void {
   const distIndex = config.distIndex
   const distRoot = dirname(distIndex)
+  const landingPath = config.landingPage === undefined || config.landingPage.trim().length === 0
+    ? undefined
+    : resolve(config.landingPage)
+  // Read once per process: the landing document is deployment content, and a
+  // missing file degrades to the authenticated-index refusal rather than a 500.
+  let landingCache: Promise<string | undefined> | undefined
+  const readLandingPage = landingPath === undefined ? undefined : (): Promise<string | undefined> =>
+    landingCache ??= readFile(landingPath, 'utf8').catch((error: unknown) => {
+      if (!STATIC_MISS_CODES.has((error as NodeJS.ErrnoException).code)) throw error
+      return undefined
+    })
   // Connection's browser authentication writes the token exchange's 303 or
   // the 401 through a writeHead/end response; capture it as a Fetch response.
   // The answer stays a 401 unless Connection writes another one.
@@ -166,6 +208,7 @@ export function apply(ctx: Context, config: Config): void {
       // reference they insert.
       (html, admittedPeer) => ctx.webServer.renderIndex(html, peer ?? admittedPeer ?? ctx.connection.browserPeer)
         .replace(/<head(?:\s[^>]*)?>/i, open => `${open}<base href="./">`),
+      readLandingPage,
     ),
   }), 'frontend-static: fallback seat')
 }

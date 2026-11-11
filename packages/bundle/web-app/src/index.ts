@@ -14,7 +14,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { auditStartupEntries } from '@deepseek-ai/dsh-app-boot'
@@ -70,6 +70,13 @@ export interface Config {
    * Absent or YAML `null` advertises the bind-address URL.
    */
   publicUrl?: string
+  /**
+   * Path of a public landing document served as the signed-out home page,
+   * relative to the process working directory or absolute. The authorized
+   * index still serves the application; unauthenticated visitors see this
+   * document instead of the authentication refusal.
+   */
+  landingPage?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -77,6 +84,7 @@ export const Config: z<Config> = z.object({
   printUrl: z.boolean().default(true),
   surfaceContext: z.boolean().default(true),
   publicUrl: z.transform(z.string(), value => parsePublicUrl(value).href),
+  landingPage: z.string(),
 })
 
 /** Environment variable naming the advertised URL of this Web GUI. */
@@ -203,7 +211,13 @@ export function apply(ctx: Context, config: Config): void {
   /** The advertised root: the canonical `publicUrl`, or the listener's own origin. */
   const appRootUrl = (): string => publicUrl ?? ctx.webServer.getOrigin()
   ctx.provide('webApp', { getAdvertisedUrl: appRootUrl } satisfies WebApp)
-  ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
+  const landingPage = config.landingPage === undefined || config.landingPage.trim().length === 0
+    ? undefined
+    : resolve(config.landingPage)
+  ctx.plugin(FrontendStatic, {
+    distIndex: internals.resolveDistIndex(),
+    ...landingPage === undefined ? {} : { landingPage },
+  })
   if (config.surfaceContext) {
     ctx.inject(['shellEnv'], (runtimeCtx) => {
       runtimeCtx.shellEnv.register({

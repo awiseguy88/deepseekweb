@@ -1,5 +1,22 @@
 /** Tenant authentication contracts shared by the WiseAI host and API layers. */
-export type { TenantAuthStore, TenantRoots, TenantSessionRecord, TenantUserRecord } from './types.ts'
+export type {
+  SalesEventInput,
+  SalesEventRecord,
+  SupportRequestInput,
+  SupportRequestPatch,
+  SupportRequestPriority,
+  SupportRequestRecord,
+  SupportRequestStatus,
+  TenantAccountPatch,
+  TenantAccountRecord,
+  TenantAuthStore,
+  TenantProfilePatch,
+  TenantRecord,
+  TenantRoots,
+  TenantSessionListRecord,
+  TenantSessionRecord,
+  TenantUserRecord,
+} from './types.ts'
 export { tenantRoots } from './types.ts'
 export { hashPassword, verifyPassword } from './password.ts'
 export { issueSession, resolveSession, logoutSession } from './session-tokens.ts'
@@ -12,3 +29,20 @@ export type { Config as TenantAuthPluginConfig } from './plugin.ts'
 export { createPostgresTenantAuthStore } from './pg-client.ts'
 export { PostgresTenantAuthStore } from './postgres.ts'
 export type { TenantAuthDatabase } from './postgres.ts'
+export { applyTenantAuthMigrations } from './schema.ts'
+export {
+  adminApiResponse,
+  handleAdminApi,
+  handleSupportApi,
+  resolvePlatformAdmin,
+  resolveTenantAccount,
+  supportApiResponse,
+} from './admin-http.ts'
+export { renderAdminPage } from './admin-page.ts'
+export {
+  createCheckoutLink,
+  parseStripeEvent,
+  stripeConfig,
+  summarizeStripeEvent,
+  verifyStripeSignature,
+} from './stripe.ts'
