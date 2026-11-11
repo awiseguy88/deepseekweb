@@ -133,7 +133,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
 <h1 class="sr-only">WiseAI admin console</h1>
 <header class="topbar">
   <div class="brand"><span class="mark" aria-hidden="true">W</span><span>WiseAI</span><span class="tag">Admin</span></div>
-  <div class="topbar-actions"><span class="muted small" id="console-role">Platform operator</span><button type="button" class="btn ghost small" id="signout">Sign out</button></div>
+  <div class="topbar-actions"><a class="btn ghost small" href="/">Back to harness</a><span class="muted small" id="console-role">Platform operator</span><button type="button" class="btn ghost small" id="signout">Sign out</button></div>
 </header>
 <nav class="tabs" role="tablist" aria-label="Admin sections">
   <button type="button" class="tab" id="tab-overview" role="tab" aria-controls="panel-overview" aria-selected="true" tabindex="0" data-tab="overview">Overview</button>

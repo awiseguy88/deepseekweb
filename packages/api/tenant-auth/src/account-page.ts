@@ -23,13 +23,13 @@ label{display:block;font-size:.82rem;color:#a8a69f;margin:.6rem 0 .25rem}
 input{width:100%;padding:.65rem .75rem;border-radius:8px;border:1px solid #3d403a;background:#0f100e;color:#e8e6e1;font:inherit}
 button{font:inherit;padding:.6rem 1rem;border-radius:8px;border:1px solid #4a4d45;background:#22241f;color:#e8e6e1;cursor:pointer}
 button.primary{background:#eb6c2c;border-color:#eb6c2c;color:#180f0a;font-weight:600}
-button.ghost{background:transparent}
+button.ghost{background:transparent}a.btnlink{font:inherit;padding:.6rem 1rem;border-radius:8px;border:1px solid #4a4d45;background:transparent;color:#e8e6e1;text-decoration:none}a.btnlink:hover{background:#1c1d19}
 .row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
 .muted{color:#8f8d86;font-size:.9rem}
 .status{min-height:1.4em;font-size:.9rem}.status.ok{color:#9fd07a}.status.bad{color:#ff9f8f}
 table{width:100%;border-collapse:collapse}td{padding:.4rem 0;border-bottom:1px solid #24261f}td:last-child{text-align:right;color:#d8d5cd}
 </style></head><body><main>
-<header><h1>Account</h1><div class="row"><button id="account" class="ghost">Admin</button><button id="signout" class="ghost">Sign out</button></div></header>
+<header><h1>Account</h1><div class="row"><a class="btnlink" href="/">Back to harness</a><button id="account" class="ghost">Admin</button><button id="signout" class="ghost">Sign out</button></div></header>
 <section><h2>Profile</h2><table>
 <tr><td>Email</td><td id="email">—</td></tr>
 <tr><td>Role</td><td id="role">—</td></tr>
