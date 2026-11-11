@@ -1059,7 +1059,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     var tenantId = state.customerTenant;
     if (!tenantId) return;
     api('/admin/api/customers/' + encodeURIComponent(tenantId) + '/delete-preview').then(function (preview) {
-      var typed = window.prompt('Disable this customer? Its accounts and sign-ins stop working immediately; rows are retained for recovery.\n\nType the customer name to confirm: "' + preview.confirmationName + '"', '');
+      var typed = window.prompt('Disable this customer? Its accounts and sign-ins stop working immediately; rows are retained for recovery. Type the customer name to confirm: "' + preview.confirmationName + '"', '');
       if (typed === null) return;
       if (typed !== preview.confirmationName) {
         toast('Not disabled: name did not match.', 'error');
