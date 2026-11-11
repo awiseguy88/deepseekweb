@@ -13,7 +13,9 @@ COPY . .
 ARG RAILWAY_GIT_COMMIT_SHA=0000000
 ENV DSH_CLIENT_COMMIT_HASH=$RAILWAY_GIT_COMMIT_SHA
 
-RUN corepack enable && pnpm install --frozen-lockfile && pnpm run build
+RUN corepack enable
+RUN pnpm install --frozen-lockfile
+RUN pnpm run build
 
 ENV DSH_HOME=/data
 
