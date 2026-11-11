@@ -50,6 +50,7 @@ function runCodeFlavor(language: string, execution = {
     description: `Execute a ${language} program against the available tools. Takes two required arguments: `
       + `\`code\`, ${execution.programDescription}, and \`description\`, a short summary of what the program does. `
       + 'Call tools as `await tools.name(args)` per the declarations in the system prompt. '
+      + 'If a tool fails, inspect the complete error before retrying; never repeat the same tool call with the same arguments after two identical failures. Stop the program and return a concise diagnostic when the provider contract is unclear. '
       + `${execution.outputInstruction} Image-bearing subtool results are attached after the run.`,
     codeDescription: execution.codeDescription,
   }
