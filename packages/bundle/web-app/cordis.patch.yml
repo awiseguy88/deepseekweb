@@ -257,6 +257,9 @@
         # deployment values, for example: ['app.internal', ...ctx.webStartup.trustedHosts].
         # The listener's bind IP is accepted separately from this list.
         trustedHosts: !!js ctx.webStartup.trustedHosts
+        # Hosted deployments admit only database-validated tenant sessions; the
+        # launch-token owner identity and /connect are refused there.
+        requireTenantSession: !!js process.env.WISEAI_AUTH_REQUIRED === '1'
 
     # Hosted WiseAI tenant authentication. Disabled for local web sessions;
     # Railway enables it with WISEAI_AUTH_REQUIRED=1 and DATABASE_URL.
@@ -264,8 +267,7 @@
       name: '@deepseek-ai/dsh-api-tenant-auth'
       disabled: !!js process.env.WISEAI_AUTH_REQUIRED !== '1'
       config:
-        # Signed-out visitors are redirected to /login; the marketing document
-        # is the only public page, served at /welcome.
+        # The public marketing document is served at the application root.
         landingPage: !!js process.env.WISEAI_LANDING_PAGE ?? ''
 
     # Raw Blob and ReadableStream uploads run independently of Connection's

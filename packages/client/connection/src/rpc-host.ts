@@ -96,6 +96,12 @@ export class HostConnectionService extends Service implements HostConnectionHand
     ctx: Context,
     private readonly trustedHosts: readonly string[],
     private readonly browserAuth: BrowserAuth,
+    /**
+     * Hosted deployments admit only database-validated tenant sessions: the
+     * launch-token browser identity and its `/connect` exchange are refused,
+     * so the public marketing page and `/login` are the only anonymous pages.
+     */
+    private readonly requireTenantSession = false,
   ) {
     super(ctx, 'connection')
     this.owner = ctx
@@ -138,13 +144,16 @@ export class HostConnectionService extends Service implements HostConnectionHand
   admit(request: ConnectionTrustRequest): PeerAdmission {
     if (!this.isTrusted(request)) return { rejection: 403 }
     if (this.disposed) return { rejection: 401 }
-    const secure = this.owner.get('webServer')?.protocol === 'https:'
-    if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
     const tenantToken = readTenantCookie(request.headers)
     if (tenantToken !== undefined) {
       const tenant = this.tenantPeers.get(tenantToken)
       if (tenant !== undefined) return { peer: tenant.peer }
     }
+    // A hosted deployment has no launch-token or connected-owner identity:
+    // every peer must come from a database-validated tenant session.
+    if (this.requireTenantSession) return { rejection: 401 }
+    const secure = this.owner.get('webServer')?.protocol === 'https:'
+    if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
     const id = this.browserAuth.authenticateApi(request, secure)
     const record = id === undefined ? undefined : this.peers.get(id)
     return record === undefined ? { rejection: 401 } : { peer: record.peer }
@@ -219,6 +228,12 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param response - response owned to completion.
    */
   authorizeConnect(request: ConnectionIndexRequest, response: ConnectionIndexResponse): void {
+    if (this.requireTenantSession) {
+      // Hosted deployments have no launch-token owner; sign in at /login.
+      response.writeHead(403)
+      response.end('forbidden')
+      return
+    }
     if (!this.isTrusted(request) || this.disposed) {
       response.writeHead(this.disposed ? 401 : 403)
       response.end(this.disposed ? 'unauthorized' : 'forbidden')
@@ -234,20 +249,25 @@ export class HostConnectionService extends Service implements HostConnectionHand
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
     const peer = this.peerForIndex(request)
     if (peer !== undefined) return true
+    // Hosted deployments never exchange a launch token for an owner session.
+    if (this.requireTenantSession) return false
     return this.browserAuth.authorizeIndex(request, response, this.ctx.get('webServer')?.protocol === 'https:')
   }
 
   /** Resolve the Peer represented by an already-authenticated index request. */
   peerForIndex(request: ConnectionIndexRequest): PeerScope | undefined {
-    const secure = this.ctx.get('webServer')?.protocol === 'https:'
-    if (this.browserAuth.isAuthenticated(request, secure)) return this.browserPeer
     const token = readTenantCookie(request.headers)
-    return token === undefined ? undefined : this.tenantPeers.get(token)?.peer
+    const tenant = token === undefined ? undefined : this.tenantPeers.get(token)?.peer
+    if (tenant !== undefined) return tenant
+    if (this.requireTenantSession) return undefined
+    const secure = this.ctx.get('webServer')?.protocol === 'https:'
+    return this.browserAuth.isAuthenticated(request, secure) ? this.browserPeer : undefined
   }
 
   /** Add this process's launch token to the clean application URL. */
   authenticatedUrl(baseUrl: string): string {
-    return this.browserAuth.authenticatedUrl(baseUrl)
+    // Hosted deployments sign in at /login; no token-bearing URL is printed.
+    return this.requireTenantSession ? baseUrl : this.browserAuth.authenticatedUrl(baseUrl)
   }
 
   /**

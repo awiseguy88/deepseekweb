@@ -107,6 +107,12 @@ export interface ConnectionConfig {
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /**
+   * Admit only database-validated tenant sessions. Hosted deployments enable
+   * this so the launch-token owner identity and `/connect` cannot open the
+   * application; anonymous visitors see the static marketing page and `/login`.
+   */
+  requireTenantSession?: boolean
 }
 
 export const Config: z<ConnectionConfig> = z.object({
@@ -114,6 +120,7 @@ export const Config: z<ConnectionConfig> = z.object({
   trustedHosts: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  requireTenantSession: z.boolean().default(false),
 })
 
 /**
@@ -137,6 +144,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
     ctx,
     trustedHosts,
     await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    config?.requireTenantSession === true,
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
