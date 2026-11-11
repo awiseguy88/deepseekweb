@@ -28,7 +28,13 @@ export async function applyTenantAuthMigrations(db: TenantAuthDatabase): Promise
     .sort((left, right) => left.localeCompare(right))
   for (const name of names) {
     const sql = await readFile(new URL(name, MIGRATIONS_DIR), 'utf8')
-    for (const statement of sql.split(';').map(part => part.trim()).filter(part => part.length > 0)) {
+    // Strip line comments before splitting: prose comments may contain a
+    // semicolon (for example "wins; the policy ..."), and the splitter below
+    // only understands semicolon-separated DDL.
+    const withoutComments = sql.split('\n')
+      .filter(line => !line.trimStart().startsWith('--'))
+      .join('\n')
+    for (const statement of withoutComments.split(';').map(part => part.trim()).filter(part => part.length > 0)) {
       await db.query(statement, [])
     }
   }
