@@ -205,7 +205,10 @@
     # prints the URL line, and opens the canonical URL after the full Loader
     # tree settles and the required-entry audit passes. Invocation-only values
     # come from the webStartup provider; the advertised application URL is
-    # this row's `publicUrl`, otherwise the bind-address URL.
+    # this row's `publicUrl`, otherwise the bind-address URL. Hosted
+    # deployments publish a signed-out landing document through
+    # WISEAI_LANDING_PAGE; an unset or empty value keeps the authenticated-index
+    # refusal as the browser-facing default.
     - id: web-runtime
       name: '@deepseek-ai/dsh-web-app'
       inject: [webStartup]
@@ -214,6 +217,7 @@
         printUrl: true
         publicUrl: !!js ctx.webStartup.publicUrl
         surfaceContext: true
+        landingPage: !!js process.env.WISEAI_LANDING_PAGE ?? ''
 
     # Model context for an agent that inspects or extends the harness serving
     # this GUI: value-free prompt sections plus the current checkout and GUI
@@ -422,6 +426,11 @@
     # record panels over the session job-output service.
     - id: ui-jobs
       name: '@deepseek-ai/dsh-client-ui-jobs'
+
+    # In-app support: the sidebar-footer Need help action files a support
+    # request at POST /support/requests for the signed-in customer.
+    - id: ui-support
+      name: '@deepseek-ai/dsh-client-ui-support'
 
     # Task management and Session reminder catalog over the Host Schedule
     # service mounted above.
