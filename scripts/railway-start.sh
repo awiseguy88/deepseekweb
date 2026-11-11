@@ -28,20 +28,26 @@ if [ "${WISEAI_AUTH_REQUIRED:-0}" = "1" ]; then
   export WISEAI_RECOVER_MISSING_CWD
 fi
 
-if [ -n "${DSH_WEB_PUBLIC_URL:-}" ]; then
-  public_url="$DSH_WEB_PUBLIC_URL"
-  trusted_host="${DSH_WEB_TRUSTED_HOST:-}"
-  if [ -z "$trusted_host" ]; then
-    echo 'DSH_WEB_TRUSTED_HOST is required when DSH_WEB_PUBLIC_URL is set.' >&2
-    exit 64
-  fi
-else
-  if [ -z "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
-    echo 'Generate a Railway public domain or set DSH_WEB_PUBLIC_URL and DSH_WEB_TRUSTED_HOST.' >&2
-    exit 64
-  fi
-  public_url="https://${RAILWAY_PUBLIC_DOMAIN}/"
-  trusted_host="$RAILWAY_PUBLIC_DOMAIN"
+public_url="${DSH_WEB_PUBLIC_URL:-}"
+trusted_host="${DSH_WEB_TRUSTED_HOST:-}"
+railway_domain="${RAILWAY_PUBLIC_DOMAIN:-}"
+if [ -n "$railway_domain" ]; then
+  # Railway's generated domain wins over a stale *.up.railway.app value in
+  # DSH_WEB_PUBLIC_URL; an explicit custom domain is kept.
+  case "$public_url" in
+    ""|*".up.railway.app"*) public_url="https://${railway_domain}/" ;;
+  esac
+  if [ -z "$trusted_host" ]; then trust_host_extra="$railway_domain"; fi
+fi
+if [ -z "$public_url" ] || { [ -z "$trusted_host" ] && [ -z "${trust_host_extra:-}" ]; }; then
+  echo 'Set DSH_WEB_PUBLIC_URL and DSH_WEB_TRUSTED_HOST, or provide RAILWAY_PUBLIC_DOMAIN.' >&2
+  exit 64
+fi
+
+trusted_args=""
+if [ -n "$trusted_host" ]; then trusted_args="--trusted-host $trusted_host"; fi
+if [ -n "${trust_host_extra:-}" ] && [ "${trust_host_extra:-}" != "$trusted_host" ]; then
+  trusted_args="${trusted_args} --trusted-host $trust_host_extra"
 fi
 
 set -- $(hostname -I 2>/dev/null || hostname -i)
@@ -57,4 +63,5 @@ if [ -z "$bind_host" ]; then
   exit 69
 fi
 
-exec pnpm start:web -- --no-open --host "$bind_host" --port "$PORT" --public-url "$public_url" --trusted-host "$trusted_host"
+# shellcheck disable=SC2086
+exec pnpm start:web -- --no-open --host "$bind_host" --port "$PORT" --public-url "$public_url" $trusted_args
