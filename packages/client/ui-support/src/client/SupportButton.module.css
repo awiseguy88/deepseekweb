@@ -147,3 +147,33 @@
   font-size: 14px;
   line-height: 22px;
 }
+
+/* Hosted account menu: two compact footer rows under Need help?. */
+.tenantActions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.tenantActionsRail {
+  width: auto;
+}
+
+.tenantButton {
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.tenantButton:hover {
+  background: var(--dsw-alias-fill-hover, #ffffff0d);
+}

@@ -8,6 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { SupportButton } from './SupportButton.tsx'
+import { TenantAccountActions } from './TenantAccountActions.tsx'
 import { en, ja, es, fr, de, ru, pt, NS, zh, type SupportKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -35,4 +36,12 @@ export function apply(ctx: ClientContext): void {
     order: 30,
     locale: NS,
   }, SupportButton))
+  // Hosted tenant account menu: Account and Sign out, hidden when the page
+  // carries no tenant session.
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+    name: 'sidebar.footer.action',
+    id: 'tenant-account',
+    order: 40,
+    locale: NS,
+  }, TenantAccountActions))
 }

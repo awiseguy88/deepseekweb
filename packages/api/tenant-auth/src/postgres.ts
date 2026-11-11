@@ -461,6 +461,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     if (patch.disabled !== undefined) fields.push(['disabled', patch.disabled])
     if (patch.passwordHash !== undefined) fields.push(['password_hash', patch.passwordHash])
     if (patch.platformAdmin !== undefined) fields.push(['platform_admin', patch.platformAdmin])
+    if (patch.email !== undefined) fields.push(['email', patch.email.trim().toLowerCase()])
     const update = assignments(fields)
     const parameters = [...update.parameters, userId]
     const result = await this.db.query<AccountRow>(

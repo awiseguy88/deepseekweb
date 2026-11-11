@@ -40,6 +40,8 @@ export {
   supportApiResponse,
 } from './admin-http.ts'
 export { renderAdminPage } from './admin-page.ts'
+export { handleAccountApi } from './account-http.ts'
+export { renderAccountPage } from './account-page.ts'
 export { createTenantAccess } from './tenant-access.ts'
 export type { TenantAccess, TenantAccessOptions } from './tenant-access.ts'
 export {

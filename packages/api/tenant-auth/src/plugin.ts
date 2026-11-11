@@ -9,8 +9,10 @@ import { handleNodeAuthRequest } from './http.ts'
 import type { TenantAuthStore } from './types.ts'
 import { hashPassword } from './password.ts'
 import { createPostgresTenantAuthStore } from './pg-client.ts'
-import { handleAdminApi, handleSupportApi, resolveAdmin } from './admin-http.ts'
+import { handleAdminApi, handleSupportApi, resolveAdmin, resolveTenantAccount } from './admin-http.ts'
 import { renderAdminPage } from './admin-page.ts'
+import { handleAccountApi } from './account-http.ts'
+import { renderAccountPage } from './account-page.ts'
 import { parseStripeEvent, stripeConfig, summarizeStripeEvent, verifyStripeSignature } from './stripe.ts'
 import { createTenantAccess } from './tenant-access.ts'
 
@@ -126,6 +128,34 @@ export function apply(ctx: Context, config: Config): void {
       path: '/support',
       handler: (request: IncomingMessage, response: ServerResponse) => handleSupportApi(store, request, response),
     })
+    const disposeAccount = webServer.register({
+      kind: 'exact',
+      path: '/account',
+      handler: async (request: IncomingMessage, response: ServerResponse) => {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          json(response, 405, { error: 'method_not_allowed' })
+          return
+        }
+        const account = await resolveTenantAccount(store, nodeRequest(request))
+        if (account === null) {
+          response.writeHead(302, { location: '/login?next=/account', 'cache-control': 'no-store' })
+          response.end()
+          return
+        }
+        const html = renderAccountPage()
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'content-length': Buffer.byteLength(html),
+        })
+        response.end(request.method === 'HEAD' ? undefined : html)
+      },
+    })
+    const disposeAccountApi = webServer.register({
+      kind: 'prefix',
+      path: '/account/api',
+      handler: (request: IncomingMessage, response: ServerResponse) => handleAccountApi(store, request, response),
+    })
     const stripe = stripeConfig()
     const disposeStripe = webServer.register({
       kind: 'exact',
@@ -160,6 +190,8 @@ export function apply(ctx: Context, config: Config): void {
       dispose()
       disposeAdmin()
       disposeSupport()
+      disposeAccount()
+      disposeAccountApi()
       disposeStripe()
       disposeWelcome()
       await database.close()

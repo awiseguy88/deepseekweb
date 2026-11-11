@@ -20,6 +20,8 @@ export const zh = {
   'error.signIn': '登录状态已失效，请重新登录。',
   'error.failed': '请求发送失败，请重试。',
   'success.message': '感谢反馈，你的请求已发送。我们会通过邮件回复你。',
+  'account.label': '账户',
+  'account.signOut': '退出登录',
 } as const
 
 /** English dictionary, key-identical to the Chinese source of truth. */
@@ -39,6 +41,8 @@ export const en: Record<SupportKey, string> = {
   'error.signIn': 'Please sign in again.',
   'error.failed': "Couldn't send your request. Try again.",
   'success.message': "Thanks — your request is sent. We'll get back to you by email.",
+  'account.label': 'Account',
+  'account.signOut': 'Sign out',
 }
 
 /** Key domain of the `support` namespace (zh is the source of truth). */
@@ -61,6 +65,8 @@ export const ja = {
   'error.signIn': 'もう一度サインインしてください。',
   'error.failed': 'リクエストを送信できませんでした。もう一度お試しください。',
   'success.message': 'ありがとうございます。リクエストを送信しました。メールでご連絡します。',
+  'account.label': 'アカウント',
+  'account.signOut': 'ログアウト',
 } satisfies Record<keyof typeof en, string>
 
 /** Spanish dictionary, checked against the English keys. */
@@ -80,6 +86,8 @@ export const es = {
   'error.signIn': 'Vuelve a iniciar sesión.',
   'error.failed': 'No se pudo enviar tu solicitud. Inténtalo de nuevo.',
   'success.message': 'Gracias, tu solicitud se envió. Te responderemos por correo.',
+  'account.label': 'Cuenta',
+  'account.signOut': 'Cerrar sesión',
 } satisfies Record<keyof typeof en, string>
 
 /** French dictionary, checked against the English keys. */
@@ -99,6 +107,8 @@ export const fr = {
   'error.signIn': 'Veuillez vous reconnecter.',
   'error.failed': 'Impossible d’envoyer votre demande. Réessayez.',
   'success.message': 'Merci, votre demande est envoyée. Nous vous répondrons par e-mail.',
+  'account.label': 'Compte',
+  'account.signOut': 'Se déconnecter',
 } satisfies Record<keyof typeof en, string>
 
 /** German dictionary, checked against the English keys. */
@@ -118,6 +128,8 @@ export const de = {
   'error.signIn': 'Bitte melden Sie sich erneut an.',
   'error.failed': 'Ihre Anfrage konnte nicht gesendet werden. Versuchen Sie es erneut.',
   'success.message': 'Danke, Ihre Anfrage ist gesendet. Wir antworten per E-Mail.',
+  'account.label': 'Konto',
+  'account.signOut': 'Abmelden',
 } satisfies Record<keyof typeof en, string>
 
 /** Russian dictionary, checked against the English keys. */
@@ -137,6 +149,8 @@ export const ru = {
   'error.signIn': 'Пожалуйста, войдите снова.',
   'error.failed': 'Не удалось отправить запрос. Попробуйте ещё раз.',
   'success.message': 'Спасибо, ваш запрос отправлен. Мы ответим по электронной почте.',
+  'account.label': 'Аккаунт',
+  'account.signOut': 'Выйти',
 } satisfies Record<keyof typeof en, string>
 
 /** Portuguese dictionary, checked against the English keys. */
@@ -156,4 +170,6 @@ export const pt = {
   'error.signIn': 'Faça login novamente.',
   'error.failed': 'Não foi possível enviar sua solicitação. Tente novamente.',
   'success.message': 'Obrigado, sua solicitação foi enviada. Responderemos por e-mail.',
+  'account.label': 'Conta',
+  'account.signOut': 'Sair',
 } satisfies Record<keyof typeof en, string>

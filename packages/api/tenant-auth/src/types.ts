@@ -117,6 +117,8 @@ export interface TenantAccountPatch {
   readonly disabled?: boolean
   readonly passwordHash?: string
   readonly platformAdmin?: boolean
+  /** Sign-in email; unique across the deployment. */
+  readonly email?: string
 }
 
 /** Input accepted from a signed-in customer raising a support request. */
