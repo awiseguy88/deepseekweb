@@ -84,6 +84,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly tenantId: string
       readonly userId: string
       readonly role: 'admin' | 'member'
+      readonly platformAdmin?: boolean
     }
   }
 }
@@ -320,7 +321,7 @@ export class SessionController extends TypertRemoteService {
    * @param request - optional blank Session to reuse, location, and Agent preset.
    * @returns the created or reused Session identity and its preset when configured.
    */
-  @Remote('create')
+  @Remote({ name: 'create', resources: { session: () => undefined } })
   async create(request: SessionCreateRequest): Promise<SessionCreateValue> {
     const value = await this.commands.create(request)
     this.claimSessionOwnership(value.sessionId)
