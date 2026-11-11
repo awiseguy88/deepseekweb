@@ -354,8 +354,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
 
 function readTenantCookie(headers: ConnectionTrustRequest['headers']): string | undefined {
   const raw = headers instanceof Headers ? headers.get('cookie') : headers.cookie
-  const value = Array.isArray(raw) ? raw.join(';') : raw
-  const item = value?.split(';').map(part => part.trim()).find(part => part.startsWith(`${TENANT_COOKIE}=`))
+  const value = typeof raw === 'string' ? raw : raw?.join(';')
+  const item = value?.split(';').map((part: string) => part.trim()).find((part: string) => part.startsWith(`${TENANT_COOKIE}=`))
   if (item === undefined) return undefined
   try {
     const token = decodeURIComponent(item.slice(TENANT_COOKIE.length + 1))
