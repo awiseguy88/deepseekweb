@@ -61,6 +61,15 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   ctx.effect(() => () => access.dispose(), 'wiseai-tenant-auth: tenant access')
+  // The hosted blank home greets the signed-in account; the injected label is
+  // empty for an operator Peer without a recorded display name.
+  ctx.effect(() => ctx.on('webserver/index-inject', (table, peer) => {
+    const principal = peer.principal
+    const name = principal.kind === 'tenant'
+      ? principal.email === undefined ? '' : principal.email.split('@')[0] ?? ''
+      : connection.displayNameOf(peer) ?? ''
+    table.push({ kind: 'global', name: '__DSH_TENANT_USER__', value: name })
+  }), 'wiseai-tenant-auth: home greeting')
   // The public marketing document is served at the application root; the
   // signed-out gate stays on the application itself after a sign-in attempt.
   const landingPath = config.landingPage === undefined || config.landingPage.trim().length === 0
@@ -311,7 +320,7 @@ async function route(
     // A platform operator keeps the main harness: the sign-in becomes the owner
     // Peer. Ordinary accounts stay scoped by the tenant access policy.
     register: (token, principal) => principal.platformAdmin === true
-      ? connection.registerOwnerSession(token)
+      ? connection.registerOwnerSession(token, principal.email?.split('@')[0])
       : connection.registerTenantSession(token, principal),
     unregister: token => connection.unregisterTenantSession(token),
   })

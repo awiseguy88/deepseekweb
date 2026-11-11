@@ -47,6 +47,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly role: 'admin' | 'member'
       /** Platform operator: a sign-in is admitted with the owner's harness access. */
       readonly platformAdmin?: boolean
+      /** Sign-in email, used for the hosted home greeting. */
+      readonly email?: string
     }
   }
 }
@@ -86,6 +88,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
   readonly browserPeer: PeerScope
   private readonly peers = new Map<PeerId, PeerRecord>()
   private readonly tenantPeers = new Map<string, PeerRecord>()
+  /** Display names recorded for operator sign-ins, keyed by Peer id. */
+  private readonly peerDisplayNames = new Map<string, string>()
   private readonly owner: Context
   private disposed = false
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
@@ -192,18 +196,29 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param token - opaque session token already validated against the store.
    * @returns disposer retiring the Peer.
    */
-  registerOwnerSession(token: string): () => Promise<void> {
+  registerOwnerSession(token: string, displayName?: string): () => Promise<void> {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('Invalid owner session token')
     const existing = this.tenantPeers.get(token)
     if (existing !== undefined) void existing.peer.dispose()
     const peer = new Peer(this.owner, { principal: { kind: 'owner' } })
+    if (displayName !== undefined) this.peerDisplayNames.set(peer.id, displayName)
     this.tenantPeers.set(token, { peer, ownsSocket: false })
     return async () => {
       const current = this.tenantPeers.get(token)
       if (current?.peer !== peer) return
       this.tenantPeers.delete(token)
+      this.peerDisplayNames.delete(peer.id)
       await peer.dispose()
     }
+  }
+
+  /**
+   * Read the display name recorded for one admitted operator Peer.
+   * @param peer - Peer resolved by an index or API admission.
+   * @returns the operator name, or undefined when none was recorded.
+   */
+  displayNameOf(peer: PeerScope): string | undefined {
+    return this.peerDisplayNames.get(peer.id)
   }
 
   /** Retire the isolated Peer bound to one validated tenant session token. */

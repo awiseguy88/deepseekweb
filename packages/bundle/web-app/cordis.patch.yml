@@ -366,8 +366,10 @@
       name: '@deepseek-ai/dsh-client-ui-chat'
 
     # Official occupants for the sidebar brand slots and the home whale frame layer.
+    # Hosted WiseAI keeps the blank home minimal: no whale frame artwork.
     - id: ui-brand-official
       name: '@deepseek-ai/dsh-client-ui-brand-official'
+      disabled: true
 
     - id: ui-attachment
       name: '@deepseek-ai/dsh-client-ui-attachment'

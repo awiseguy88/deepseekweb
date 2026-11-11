@@ -131,6 +131,12 @@ function HeroFish({ hovering }: { hovering: boolean }) {
  */
 export function HeroShell({ t, renderSlot, children }: HeroShellProps) {
   const [hovering, setHovering] = useState(false)
+  // Hosted deployments inject the signed-in identity into the index; the
+  // blank home greets that account and falls back to the product headline.
+  const account = (globalThis as { __DSH_TENANT_USER__?: string }).__DSH_TENANT_USER__
+  const greeting = account === undefined
+    ? t('hero.headline')
+    : account === '' ? t('hero.welcomeBackAnonymous') : t('hero.welcomeBack', { name: account })
   return (
     <div className={css.root}>
       <div className={css.stack}>
@@ -152,7 +158,7 @@ export function HeroShell({ t, renderSlot, children }: HeroShellProps) {
           </span>
           <span className={css.titleGroup}>
             {/* Own element: keeps the headline text addressable apart from the badge. */}
-            <span>{t('hero.headline')}</span>
+            <span>{greeting}</span>
             <span className={css.previewBadge}>{t('hero.preview')}</span>
           </span>
         </div>

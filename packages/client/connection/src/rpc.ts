@@ -218,9 +218,17 @@ export interface HostConnectionHandle {
    * Register a platform operator's sign-in as the owner Peer, so the operator
    * keeps the main harness workspace while ordinary tenants stay scoped.
    * @param token - database-validated session token.
+   * @param displayName - optional greeting name for the hosted home.
    * @returns disposer retiring the Peer.
    */
-  registerOwnerSession(token: string): () => Promise<void>
+  registerOwnerSession(token: string, displayName?: string): () => Promise<void>
+
+  /**
+   * Read the greeting name recorded for an admitted operator Peer.
+   * @param peer - Peer resolved by an index or API admission.
+   * @returns the recorded name, or undefined when none was recorded.
+   */
+  displayNameOf(peer: PeerScope): string | undefined
 
   /** Retire the tenant Peer bound to a session token. */
   unregisterTenantSession(token: string): Promise<void>
