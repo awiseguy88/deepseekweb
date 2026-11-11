@@ -153,6 +153,14 @@
     - id: mcp-manager
       name: '@deepseek-ai/dsh-mcp-manager'
       inject: [credentials]
+      config:
+        servers:
+          maton:
+            transport: streamable-http
+            url: https://mcp.maton.ai
+            headers:
+              Authorization: 'Bearer ${credential:MATON_API_KEY}'
+            enabled: false
 
     # Workspace commands and reconnect-safe projection over Typert Remote.
     - id: workspace-controller
