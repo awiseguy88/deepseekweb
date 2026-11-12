@@ -142,6 +142,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
   <button type="button" class="tab" id="tab-support" role="tab" aria-controls="panel-support" aria-selected="false" tabindex="-1" data-tab="support">Support</button>
   <button type="button" class="tab" id="tab-sessions" role="tab" aria-controls="panel-sessions" aria-selected="false" tabindex="-1" data-tab="sessions">Sessions</button>
   <button type="button" class="tab" id="tab-sales" role="tab" aria-controls="panel-sales" aria-selected="false" tabindex="-1" data-tab="sales">Sales</button>
+  <button type="button" class="tab" id="tab-audit" role="tab" aria-controls="panel-audit" aria-selected="false" tabindex="-1" data-tab="audit">Security &amp; audit</button>
 </nav>
 <main id="main">
   <h2 class="workspace-heading" id="workspace-heading" hidden></h2>
@@ -222,6 +223,15 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     <div class="warning" id="sales-warning" hidden></div>
     <p class="muted small" id="sales-summary"></p>
     <div class="card"><div id="sales-events"></div></div>
+  </section>
+  <section class="panel" id="panel-audit" role="tabpanel" aria-labelledby="tab-audit" tabindex="0" hidden>
+    <div class="panel-head">
+      <div><h2>Security &amp; audit</h2><p class="muted">Append-only administrative actions and billing events.</p></div>
+      <button type="button" class="btn ghost" id="audit-refresh">Refresh</button>
+    </div>
+    <p class="state" id="audit-status" role="status"></p>
+    <p class="muted small" id="audit-summary"></p>
+    <div class="card"><div id="audit-events"></div></div>
   </section>
 </main>
 <dialog id="new-customer-dialog" class="dialog" aria-labelledby="new-customer-title">
@@ -322,7 +332,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
 (function () {
   'use strict';
 
-  var TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales'];
+  var TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales', 'audit'];
   var state = {
     tab: 'overview',
     me: null,
@@ -551,6 +561,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     else if (name === 'support') loadSupport();
     else if (name === 'sessions') loadSessions();
     else if (name === 'sales') loadSales();
+    else if (name === 'audit') loadAudit();
   }
 
   function applyTenantAdmin(me) {
@@ -1082,6 +1093,34 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     });
   }
 
+  function loadAudit() {
+    beginLoad('panel-audit', 'audit-status');
+    api('/admin/api/audit').then(function (payload) {
+      endLoad('panel-audit', 'audit-status');
+      renderAudit(payload || {});
+    }).catch(function (error) {
+      endLoad('panel-audit', 'audit-status');
+      failLoad('audit-status', error, loadAudit);
+    });
+  }
+
+  function renderAudit(payload) {
+    var events = payload.events || [];
+    $('audit-summary').textContent = events.length + ' events.';
+    var rows = events.map(function (event) {
+      return [
+        formatDate(event.createdAt),
+        event.actorUserId,
+        event.action,
+        event.targetTenantId || event.targetId || '—',
+        make('span', 'mono small', event.details === undefined ? '—' : JSON.stringify(event.details))
+      ];
+    });
+    var host = $('audit-events');
+    clear(host);
+    host.appendChild(buildTable(['Time', 'Actor', 'Action', 'Target', 'Details'], rows, 'No audit events recorded yet.'));
+  }
+
   function loadSales() {
     beginLoad('panel-sales', 'sales-status');
     api('/admin/api/sales').then(function (payload) {
@@ -1188,6 +1227,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     $('sessions-purge').addEventListener('click', purgeDeadSessions);
     $('customer-delete').addEventListener('click', deleteCustomer);
     $('sales-refresh').addEventListener('click', loadSales);
+    $('audit-refresh').addEventListener('click', loadAudit);
     Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (button) {
       button.addEventListener('click', function () { closeDialog(button.getAttribute('data-close')); });
     });

@@ -4,7 +4,7 @@ import { renderAdminPage } from '../src/admin-page.ts'
 // Rendered once: the assertions below read the same document the route serves.
 const html = renderAdminPage()
 
-const TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales'] as const
+const TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales', 'audit'] as const
 
 describe('renderAdminPage', () => {
   it('returns one complete self-contained HTML document', () => {
@@ -24,10 +24,12 @@ describe('renderAdminPage', () => {
     expect(html).toContain('<main id="main">')
   })
 
-  it('exposes the six sections as an accessible tab set', () => {
+  it('exposes the sections as an accessible tab set', () => {
     expect(html).toContain('role="tablist"')
     expect(html.match(/role="tab"/g)).toHaveLength(TABS.length)
     expect(html.match(/role="tabpanel"/g)).toHaveLength(TABS.length)
+    expect(html).toContain('id="audit-events"')
+    expect(html).toContain('/admin/api/audit')
     for (const tab of TABS) {
       expect(html).toContain(`id="tab-${tab}"`)
       expect(html).toContain(`id="panel-${tab}"`)

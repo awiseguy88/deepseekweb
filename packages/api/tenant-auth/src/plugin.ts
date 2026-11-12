@@ -358,6 +358,14 @@ async function stripeWebhook(
       })
     }
     await store.recordSalesEvent(tenantId === null ? summary.sales : { ...summary.sales, tenantId })
+    await store.recordAuditEvent({
+      action: 'billing.stripe_event',
+      actorUserId: 'system:stripe',
+      actorTenantId: tenantId ?? 'platform',
+      ...tenantId === null ? {} : { targetTenantId: tenantId },
+      targetId: summary.sales.eventId,
+      details: { eventType: summary.sales.eventType },
+    })
     await store.finishBillingEvent(summary.sales.eventId, 'processed')
     json(response, 200, { received: true })
   } catch (error) {
