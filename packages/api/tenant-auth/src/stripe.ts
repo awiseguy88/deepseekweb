@@ -34,6 +34,8 @@ export interface StripeEvent {
   readonly id: string
   /** Stripe event type, for example `invoice.paid`. */
   readonly type: string
+  /** Stripe's creation time in Unix seconds; orders lifecycle transitions. */
+  readonly created?: number
   readonly data: {
     /** The event's primary object (checkout session, subscription, or invoice). */
     readonly object: StripeObject
@@ -354,7 +356,8 @@ export function parseStripeEvent(payload: string): StripeEvent | null {
   if (id === null || type === null || data === null) return null
   const object = readObject(data['object'])
   if (object === null) return null
-  return { id, type, data: { object } }
+  const created = readNumber(parsed['created'])
+  return { id, type, ...created === null ? {} : { created }, data: { object } }
 }
 
 /**

@@ -295,6 +295,12 @@ class FakeStore implements TenantAuthStore {
   }
 
   async finishBillingEvent(): Promise<void> {}
+
+  async noteBillingEventTenant(): Promise<void> {}
+
+  async billingEventIsStale(): Promise<boolean> {
+    return false
+  }
 }
 
 function signedIn(store: FakeStore, overrides: Partial<TenantUserRecord> = {}): FakeStore {

@@ -589,7 +589,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return result.rows.length
   }
 
-  async health(): Promise<{ tenants: boolean; deletedAt: boolean; auditEvents: boolean; sessionAdmission: boolean }> {
+  async health(): Promise<{ tenants: boolean; deletedAt: boolean; auditEvents: boolean; billingEvents: boolean; sessionAdmission: boolean }> {
     const check = async (sql: string, parameters: readonly unknown[] = []): Promise<boolean> => {
       try {
         await this.db.query(sql, parameters)
@@ -603,6 +603,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       tenants,
       deletedAt: await check('SELECT deleted_at FROM wiseai_tenants LIMIT 1'),
       auditEvents: await check('SELECT event_id FROM wiseai_audit_events LIMIT 1'),
+      billingEvents: await check('SELECT target_tenant_id FROM wiseai_billing_events LIMIT 1'),
       sessionAdmission: await check(
         `SELECT 1 FROM wiseai_tenants AS t
           WHERE t.tenant_id IS NULL
@@ -763,6 +764,25 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
         WHERE event_id = $1`,
       [eventId, status, error ?? null],
     )
+  }
+
+  async noteBillingEventTenant(eventId: string, tenantId: string): Promise<void> {
+    await this.db.query(
+      'UPDATE wiseai_billing_events SET target_tenant_id = $2 WHERE event_id = $1',
+      [eventId, tenantId],
+    )
+  }
+
+  async billingEventIsStale(tenantId: string, eventCreated: Date | null): Promise<boolean> {
+    if (eventCreated === null) return false
+    const result = await this.db.query<{ event_id: string }>(
+      `SELECT event_id FROM wiseai_billing_events
+        WHERE target_tenant_id = $1 AND status = 'processed'
+          AND event_created IS NOT NULL AND event_created > $2
+        LIMIT 1`,
+      [tenantId, eventCreated],
+    )
+    return result.rows.length > 0
   }
 
   async listSessionOwners(): Promise<readonly TenantSessionOwnerRecord[]> {

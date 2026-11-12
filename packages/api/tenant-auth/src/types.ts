@@ -221,6 +221,8 @@ export interface TenantStoreHealth {
   readonly deletedAt: boolean
   /** Migration 004's audit table exists. */
   readonly auditEvents: boolean
+  /** Migration 005/006's billing inbox and ordering column exist. */
+  readonly billingEvents: boolean
   /** The session-admission entitlement query binds and executes. */
   readonly sessionAdmission: boolean
 }
@@ -305,6 +307,15 @@ export interface TenantAuthStore {
    * @param error - failure detail stored without secrets.
    */
   finishBillingEvent(eventId: string, status: 'processed' | 'failed', error?: string): Promise<void>
+  /** Attach the resolved tenant to a claimed billing event. */
+  noteBillingEventTenant(eventId: string, tenantId: string): Promise<void>
+  /**
+   * Whether the tenant already has a processed event newer than this delivery.
+   * @param tenantId - resolved customer tenant.
+   * @param eventCreated - this event's Stripe creation time.
+   * @returns true when the delivery is stale and must not change tenant state.
+   */
+  billingEventIsStale(tenantId: string, eventCreated: Date | null): Promise<boolean>
   /** Revoke every live login session, optionally for one tenant or account. */
   revokeSessions(filter?: { readonly tenantId?: string; readonly userId?: string }): Promise<number>
   /** Delete revoked login-session rows, optionally for one tenant. */

@@ -167,7 +167,7 @@ export function apply(ctx: Context, config: Config): void {
         }
         const ok = migrationError === undefined
           && checks !== null
-          && checks.tenants && checks.deletedAt && checks.auditEvents
+          && checks.tenants && checks.deletedAt && checks.auditEvents && checks.billingEvents
         json(response, ok ? 200 : 503, {
           ok,
           migration: migrationError === undefined ? 'applied' : String(migrationError),
@@ -345,6 +345,7 @@ async function stripeWebhook(
   const claim = await store.beginBillingEvent({
     eventId: summary.sales.eventId,
     eventType: summary.sales.eventType,
+    eventCreated: event.created === undefined ? null : new Date(event.created * 1000),
   })
   if (claim === 'duplicate') {
     json(response, 200, { received: true, duplicate: true })
@@ -352,6 +353,16 @@ async function stripeWebhook(
   }
   try {
     const tenantId = summary.tenantHint.tenantId ?? await tenantForStripeHint(store, summary.tenantHint)
+    const eventCreated = event.created === undefined ? null : new Date(event.created * 1000)
+    if (tenantId !== null) {
+      await store.noteBillingEventTenant(summary.sales.eventId, tenantId)
+      // A delayed older delivery must not overwrite newer subscription state.
+      if (await store.billingEventIsStale(tenantId, eventCreated)) {
+        await store.finishBillingEvent(summary.sales.eventId, 'processed')
+        json(response, 200, { received: true, stale: true })
+        return
+      }
+    }
     if (tenantId !== null) {
       await store.updateTenant(tenantId, {
         ...summary.tenantPatch,

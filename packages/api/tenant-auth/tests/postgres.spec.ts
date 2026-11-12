@@ -606,6 +606,21 @@ describe('sales ledger', () => {
     expect(finished.calls[0]?.sql).toContain('processed_at = CASE')
   })
 
+  it('orders billing events by Stripe creation time per tenant', async () => {
+    const noted = new ScriptedDatabase().next()
+    await storeWith(noted).noteBillingEventTenant('evt-1', 'tenant-1')
+    expect(noted.calls[0]?.parameters).toEqual(['evt-1', 'tenant-1'])
+
+    const stale = new ScriptedDatabase().next([{ event_id: 'evt-newer' }])
+    expect(await storeWith(stale).billingEventIsStale('tenant-1', new Date('2026-01-01T00:00:00.000Z'))).toBe(true)
+    expect(stale.calls[0]?.parameters).toEqual(['tenant-1', new Date('2026-01-01T00:00:00.000Z')])
+    expect(stale.calls[0]?.sql).toContain('event_created > $2')
+
+    const current = new ScriptedDatabase().next([])
+    expect(await storeWith(current).billingEventIsStale('tenant-1', new Date('2026-01-01T00:00:00.000Z'))).toBe(false)
+    expect(await storeWith(new ScriptedDatabase()).billingEventIsStale('tenant-1', null)).toBe(false)
+  })
+
   it('lists the ledger newest first, optionally bounded', async () => {
     const db = new ScriptedDatabase().next([salesRow(), salesRow({ event_id: 'evt-2', amount_total: null, currency: null, status: null, tenant_id: null })])
     const events = await storeWith(db).listSalesEvents(100)
