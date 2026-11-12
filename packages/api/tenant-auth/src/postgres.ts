@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   AuditEventInput,
   AuditEventRecord,
+  BillingEventInput,
   ClaimSessionOwnerInput,
   ClaimWorkspaceOwnerInput,
   SalesEventInput,
@@ -738,6 +739,30 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     }
     const result = await this.db.query<SalesRow>(sql, parameters)
     return result.rows.map(salesRecord)
+  }
+
+  async beginBillingEvent(input: BillingEventInput): Promise<'claimed' | 'duplicate'> {
+    const result = await this.db.query<{ event_id: string }>(
+      `INSERT INTO wiseai_billing_events (event_id, event_type, event_created, status)
+       VALUES ($1, $2, $3, 'processing')
+       ON CONFLICT (event_id) DO UPDATE
+         SET status = 'processing', attempts = wiseai_billing_events.attempts + 1, last_error = NULL
+         WHERE wiseai_billing_events.status = 'failed'
+       RETURNING event_id`,
+      [input.eventId, input.eventType, input.eventCreated ?? null],
+    )
+    return result.rows.length > 0 ? 'claimed' : 'duplicate'
+  }
+
+  async finishBillingEvent(eventId: string, status: 'processed' | 'failed', error?: string): Promise<void> {
+    await this.db.query(
+      `UPDATE wiseai_billing_events
+          SET status = $2,
+              last_error = $3,
+              processed_at = CASE WHEN $2 = 'processed' THEN now() ELSE processed_at END
+        WHERE event_id = $1`,
+      [eventId, status, error ?? null],
+    )
   }
 
   async listSessionOwners(): Promise<readonly TenantSessionOwnerRecord[]> {

@@ -225,6 +225,14 @@ export interface TenantStoreHealth {
   readonly sessionAdmission: boolean
 }
 
+/** One verified Stripe event claimed for processing. */
+export interface BillingEventInput {
+  readonly eventId: string
+  readonly eventType: string
+  /** Stripe's event creation time; retained for lifecycle ordering diagnostics. */
+  readonly eventCreated?: Date | null
+}
+
 /**
  * Persistence seam for tenant identity plus the hosted-admin extensions.
  * Every method resolves the tenant from a trusted server-side identity; no
@@ -282,6 +290,21 @@ export interface TenantAuthStore {
   listAuditEvents(filter?: { readonly tenantId?: string; readonly limit?: number }): Promise<readonly AuditEventRecord[]>
   /** Report schema readiness without requiring authentication. */
   health?(): Promise<TenantStoreHealth>
+  /**
+   * Claim one verified Stripe event for processing.
+   * @param input - verified event identity.
+   * @returns `claimed` when this delivery must apply state (including a retry
+   * after failure), or `duplicate` when the event is already processed or in
+   * flight and the webhook should acknowledge without reapplying it.
+   */
+  beginBillingEvent(input: BillingEventInput): Promise<'claimed' | 'duplicate'>
+  /**
+   * Record the terminal state of a claimed event.
+   * @param eventId - verified event identity.
+   * @param status - processed or failed.
+   * @param error - failure detail stored without secrets.
+   */
+  finishBillingEvent(eventId: string, status: 'processed' | 'failed', error?: string): Promise<void>
   /** Revoke every live login session, optionally for one tenant or account. */
   revokeSessions(filter?: { readonly tenantId?: string; readonly userId?: string }): Promise<number>
   /** Delete revoked login-session rows, optionally for one tenant. */

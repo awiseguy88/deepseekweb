@@ -289,6 +289,12 @@ class FakeStore implements TenantAuthStore {
   async listAuditEvents(): Promise<readonly AuditEventRecord[]> {
     return []
   }
+
+  async beginBillingEvent(): Promise<'claimed' | 'duplicate'> {
+    return 'claimed'
+  }
+
+  async finishBillingEvent(): Promise<void> {}
 }
 
 function signedIn(store: FakeStore, overrides: Partial<TenantUserRecord> = {}): FakeStore {

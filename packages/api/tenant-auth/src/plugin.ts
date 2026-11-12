@@ -335,16 +335,38 @@ async function stripeWebhook(
     return
   }
   const summary = summarizeStripeEvent(event)
-  const tenantId = summary.tenantHint.tenantId ?? await tenantForStripeHint(store, summary.tenantHint)
-  if (tenantId !== null) {
-    await store.updateTenant(tenantId, {
-      ...summary.tenantPatch,
-      ...summary.tenantHint.customerId === undefined ? {} : { stripeCustomerId: summary.tenantHint.customerId },
-      ...summary.tenantHint.subscriptionId === undefined ? {} : { stripeSubscriptionId: summary.tenantHint.subscriptionId },
-    })
+  // Claim the verified event before touching tenant state: a duplicate (already
+  // processed or in flight) is acknowledged without reapplying, and a failed
+  // row is reclaimed when Stripe retries.
+  const claim = await store.beginBillingEvent({
+    eventId: summary.sales.eventId,
+    eventType: summary.sales.eventType,
+  })
+  if (claim === 'duplicate') {
+    json(response, 200, { received: true, duplicate: true })
+    return
   }
-  await store.recordSalesEvent(tenantId === null ? summary.sales : { ...summary.sales, tenantId })
-  json(response, 200, { received: true })
+  try {
+    const tenantId = summary.tenantHint.tenantId ?? await tenantForStripeHint(store, summary.tenantHint)
+    if (tenantId !== null) {
+      await store.updateTenant(tenantId, {
+        ...summary.tenantPatch,
+        ...summary.tenantHint.customerId === undefined ? {} : { stripeCustomerId: summary.tenantHint.customerId },
+        ...summary.tenantHint.subscriptionId === undefined ? {} : { stripeSubscriptionId: summary.tenantHint.subscriptionId },
+      })
+    }
+    await store.recordSalesEvent(tenantId === null ? summary.sales : { ...summary.sales, tenantId })
+    await store.finishBillingEvent(summary.sales.eventId, 'processed')
+    json(response, 200, { received: true })
+  } catch (error) {
+    console.error('[wiseai-tenant-auth] Stripe event processing failed:', error)
+    try {
+      await store.finishBillingEvent(summary.sales.eventId, 'failed', String(error).slice(0, 500))
+    } catch (markError) {
+      console.error('[wiseai-tenant-auth] could not mark Stripe event failed:', markError)
+    }
+    json(response, 500, { error: 'processing_failed' })
+  }
 }
 
 /** Resolve the customer tenant recorded for one Stripe event, when possible. */

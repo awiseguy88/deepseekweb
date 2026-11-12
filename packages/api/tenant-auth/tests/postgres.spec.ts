@@ -591,6 +591,21 @@ describe('sales ledger', () => {
     expect(db.calls[0]?.sql).toContain('ON CONFLICT (event_id) DO NOTHING')
   })
 
+  it('claims a verified event once and allows a retry after failure', async () => {
+    const claimed = new ScriptedDatabase().next([{ event_id: 'evt-1' }])
+    expect(await storeWith(claimed).beginBillingEvent({ eventId: 'evt-1', eventType: 'invoice.paid' })).toBe('claimed')
+    expect(claimed.calls[0]?.sql).toContain("WHERE wiseai_billing_events.status = 'failed'")
+    expect(claimed.calls[0]?.parameters).toEqual(['evt-1', 'invoice.paid', null])
+
+    const duplicate = new ScriptedDatabase().next([])
+    expect(await storeWith(duplicate).beginBillingEvent({ eventId: 'evt-1', eventType: 'invoice.paid' })).toBe('duplicate')
+
+    const finished = new ScriptedDatabase().next()
+    await storeWith(finished).finishBillingEvent('evt-1', 'failed', 'boom')
+    expect(finished.calls[0]?.parameters).toEqual(['evt-1', 'failed', 'boom'])
+    expect(finished.calls[0]?.sql).toContain('processed_at = CASE')
+  })
+
   it('lists the ledger newest first, optionally bounded', async () => {
     const db = new ScriptedDatabase().next([salesRow(), salesRow({ event_id: 'evt-2', amount_total: null, currency: null, status: null, tenant_id: null })])
     const events = await storeWith(db).listSalesEvents(100)
