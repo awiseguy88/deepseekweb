@@ -346,7 +346,7 @@ async function auditEvents(store: TenantAuthStore, tenantScope: string | undefin
   return json({ events })
 }
 
-async function updateCustomer(store: TenantAuthStore, tenantId: string, request: Request): Promise<Response> {
+async function updateCustomer(store: TenantAuthStore, actor: TenantUserRecord, tenantId: string, request: Request): Promise<Response> {
   const body = await readBody(request)
   if ('response' in body) return body.response
   const fields = body.value
@@ -390,7 +390,20 @@ async function updateCustomer(store: TenantAuthStore, tenantId: string, request:
     patch.stripeSubscriptionId = fields.stripeSubscriptionId
   }
   const customer = await store.updateTenant(tenantId, patch)
-  return customer === null ? notFound() : json({ customer })
+  if (customer === null) return notFound()
+  // Suspension takes effect immediately for sign-ins: the tenant's live login
+  // sessions are revoked so the next request cannot keep using one.
+  if (patch.status === 'canceled' || patch.status === 'disabled' || patch.disabled === true) {
+    await store.revokeSessions({ tenantId })
+    await store.recordAuditEvent({
+      action: 'customer.suspended',
+      actorUserId: actor.userId,
+      actorTenantId: actor.tenantId,
+      targetTenantId: tenantId,
+      details: { status: customer.status, disabled: customer.disabled },
+    })
+  }
+  return json({ customer })
 }
 
 async function addCustomerUser(store: TenantAuthStore, tenantId: string, request: Request): Promise<Response> {
@@ -441,7 +454,19 @@ async function updateUser(
     patch.passwordHash = await hashPassword(fields.password)
   }
   const user: TenantAccountRecord | null = await store.updateAccount(userId, patch)
-  return user === null ? notFound() : json({ user })
+  if (user === null) return notFound()
+  if (patch.disabled === true) {
+    // Disabling an account also ends its live sign-ins.
+    await store.revokeSessions({ userId })
+    await store.recordAuditEvent({
+      action: 'user.suspended',
+      actorUserId: actor.userId,
+      actorTenantId: actor.tenantId,
+      targetTenantId: user.tenantId,
+      targetId: userId,
+    })
+  }
+  return json({ user })
 }
 
 /**
@@ -647,7 +672,7 @@ async function dispatchAdmin(
     const tenantId = decodeURIComponent(rest[0])
     if (tenantScope !== undefined && tenantId !== tenantScope) return forbidden()
     if (method === 'GET') return customerDetail(store, tenantId)
-    if (method === 'POST') return updateCustomer(store, tenantId, request)
+    if (method === 'POST') return updateCustomer(store, principal.user, tenantId, request)
   }
   if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'users' && method === 'POST') {
     const tenantId = decodeURIComponent(rest[0])

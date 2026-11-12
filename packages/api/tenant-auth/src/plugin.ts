@@ -16,6 +16,7 @@ import { renderAccountPage } from './account-page.ts'
 import { parseStripeEvent, stripeConfig, summarizeStripeEvent, verifyStripeSignature } from './stripe.ts'
 import { createTenantAccess } from './tenant-access.ts'
 import { createTenantPaths } from './tenant-paths.ts'
+import { createLoginThrottle, type LoginThrottle } from './login-throttle.ts'
 
 /** Cordis configuration for the hosted WiseAI tenant auth routes. */
 export interface Config {
@@ -90,6 +91,7 @@ export function apply(ctx: Context, config: Config): void {
   // Session and Workspace controllers claim through. Start after the schema
   // settles so the ownership tables exist for the first hydration.
   const access = createTenantAccess({ ctx, store })
+  const loginThrottle = createLoginThrottle()
   ctx.effect(() => ctx.provide('tenantPaths', createTenantPaths()), 'wiseai-tenant-auth: tenant paths')
   ctx.inject(['typert', 'remoteAccess'], () => {
     void migration.then(() => access.start()).catch((error: unknown) => {
@@ -150,7 +152,7 @@ export function apply(ctx: Context, config: Config): void {
     const dispose = webServer.register({
       kind: 'prefix',
       path: '/auth',
-      handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, store, connection),
+      handler: (request: IncomingMessage, response: ServerResponse) => route(request, response, store, connection, loginThrottle),
     })
     const disposeHealth = webServer.register({
       kind: 'exact',
@@ -426,6 +428,7 @@ async function route(
   response: ServerResponse,
   store: TenantAuthStore,
   connection: HostConnectionHandle,
+  throttle?: LoginThrottle,
 ): Promise<void> {
   const rejection = connection.requestRejection(request)
   const publicRoute = request.url === '/auth/login' || request.url === '/auth/signup'
@@ -441,5 +444,5 @@ async function route(
       ? connection.registerOwnerSession(token, principal.email?.split('@')[0])
       : connection.registerTenantSession(token, principal),
     unregister: token => connection.unregisterTenantSession(token),
-  })
+  }, throttle)
 }

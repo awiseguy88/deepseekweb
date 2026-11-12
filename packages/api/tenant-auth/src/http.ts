@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { hashPassword, verifyPassword } from './password.ts'
 import { issueSession, logoutSession, resolveSession } from './session-tokens.ts'
 import { isSameOriginMutation } from './origin.ts'
+import type { LoginThrottle } from './login-throttle.ts'
 import type { TenantAuthStore } from './types.ts'
 
 /** Host callback used to bind a validated session to its isolated Peer. */
@@ -37,8 +38,8 @@ function json(value: unknown, init: ResponseInit = {}): Response {
 }
 
 /** HTTP auth surface for composition into a host WebServer route. */
-export function tenantAuthHandler(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar): Promise<Response> {
-  return handle(store, request, registrar)
+export function tenantAuthHandler(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar, throttle?: LoginThrottle): Promise<Response> {
+  return handle(store, request, registrar, throttle, 'direct')
 }
 
 /** Adapt a Node HTTP request for a host route, with a bounded body read. */
@@ -47,6 +48,7 @@ export async function handleNodeAuthRequest(
   request: IncomingMessage,
   response: ServerResponse,
   registrar?: TenantSessionRegistrar,
+  throttle?: LoginThrottle,
 ): Promise<void> {
   const chunks: Buffer[] = []
   let size = 0
@@ -66,23 +68,49 @@ export async function handleNodeAuthRequest(
   for (const [name, value] of Object.entries(request.headers)) {
     if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value)
   }
-  const result = await tenantAuthHandler(store, new Request(url, {
+  const result = await handle(store, new Request(url, {
     method: request.method ?? 'GET',
     headers,
     ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
-  }), registrar)
+  }), registrar, throttle, clientKeyOf(request))
   response.writeHead(result.status, Object.fromEntries(result.headers.entries()))
   response.end(Buffer.from(await result.arrayBuffer()))
 }
 
-async function handle(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar): Promise<Response> {
+/**
+ * Client identity for the sign-in throttle. The last X-Forwarded-For hop is the
+ * proxy-observed address; direct connections fall back to the socket address.
+ * @param request - raw Node request.
+ * @returns a stable per-client key.
+ */
+function clientKeyOf(request: IncomingMessage): string {
+  const forwarded = request.headers['x-forwarded-for']
+  const value = Array.isArray(forwarded) ? forwarded.join(',') : forwarded
+  const hops = value?.split(',').map(hop => hop.trim()).filter(hop => hop.length > 0) ?? []
+  return hops.at(-1) ?? request.socket.remoteAddress ?? 'unknown'
+}
+
+async function handle(store: TenantAuthStore, request: Request, registrar?: TenantSessionRegistrar, throttle?: LoginThrottle, clientKey = 'direct'): Promise<Response> {
   if (!isSameOriginMutation(request)) return json({ error: 'forbidden' }, { status: 403 })
   const path = new URL(request.url).pathname
   if (path === '/auth/login' && request.method === 'POST') {
     const body = await request.json().catch(() => null) as { email?: unknown; password?: unknown } | null
     if (typeof body?.email !== 'string' || typeof body.password !== 'string') return json({ error: 'invalid_credentials' }, { status: 400 })
-    const user = await store.findUserByEmail(body.email.trim())
-    if (user === null || user.disabled || !(await verifyPassword(body.password, user.passwordHash))) return json({ error: 'invalid_credentials' }, { status: 401 })
+    const email = body.email.trim().toLowerCase()
+    const throttleKey = `${email}|${clientKey}`
+    const limited = throttle?.check(throttleKey)
+    if (limited !== undefined) {
+      return json({ error: 'too_many_attempts', retryAfterSeconds: limited.retryAfterSeconds }, {
+        status: 429,
+        headers: { 'retry-after': String(limited.retryAfterSeconds) },
+      })
+    }
+    const user = await store.findUserByEmail(email)
+    if (user === null || user.disabled || !(await verifyPassword(body.password, user.passwordHash))) {
+      throttle?.fail(throttleKey)
+      return json({ error: 'invalid_credentials' }, { status: 401 })
+    }
+    throttle?.succeed(throttleKey)
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000)
     // One live sign-in per account: a new login retires earlier sessions so
     // the admin dashboard's active-session count reflects real users.
