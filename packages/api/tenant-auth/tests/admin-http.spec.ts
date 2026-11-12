@@ -20,6 +20,7 @@ import type {
   TenantProfilePatch,
   TenantRecord,
   TenantSessionListRecord,
+  UsageSummaryRow,
   TenantSessionRecord,
   TenantUserRecord,
 } from '../src/types.ts'
@@ -145,6 +146,7 @@ class FakeStore implements TenantAuthStore {
   tenantInputs: Parameters<TenantAuthStore['createTenant']>[0][] = []
   accountInputs: Parameters<TenantAuthStore['createUserInTenant']>[0][] = []
   audits: AuditEventInput[] = []
+  usageRows: UsageSummaryRow[] = []
   missingTenant = false
   missingAccount = false
   missingSupport = false
@@ -300,6 +302,12 @@ class FakeStore implements TenantAuthStore {
 
   async billingEventIsStale(): Promise<boolean> {
     return false
+  }
+
+  async recordUsageEvent(): Promise<void> {}
+
+  async usageSummary(): Promise<readonly UsageSummaryRow[]> {
+    return this.usageRows
   }
 }
 
@@ -695,6 +703,19 @@ describe('overview and customers', () => {
         stripeSubscriptionId: null,
       },
     }])
+  })
+
+  it('summarizes stored usage with totals', async () => {
+    const store = signedIn(new FakeStore())
+    store.usageRows = [
+      { tenantId: 'tenant-a', kind: 'llm', provider: 'deepseek', model: 'flash', events: 2, inputTokens: 1200, outputTokens: 300, computeMs: 4000, costMicrousd: 2500 },
+      { tenantId: 'tenant-a', kind: 'compute', provider: null, model: null, events: 1, inputTokens: 0, outputTokens: 0, computeMs: 60000, costMicrousd: 0 },
+    ]
+    const response = await adminApiResponse(store, request('/admin/api/usage'))
+    expect(response.status).toBe(200)
+    const body = await response.json() as { rows: unknown[]; totals: Record<string, number> }
+    expect(body.rows).toHaveLength(2)
+    expect(body.totals).toEqual({ events: 3, inputTokens: 1200, outputTokens: 300, computeMs: 64000, costMicrousd: 2500 })
   })
 
   it('summarizes stored customer activity for the Customer 360 view', async () => {

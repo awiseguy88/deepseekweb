@@ -339,6 +339,34 @@ async function customerSoftDelete(
   return json({ ok: true })
 }
 
+/**
+ * Read the stored usage aggregate for the caller's scope. An empty ledger is a
+ * legitimate response ("no usage recorded yet") rather than mock data.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @param url - request URL with optional `tenantId` and `since` filters.
+ * @returns aggregated rows and totals derived from them.
+ */
+async function usageSummaryResponse(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
+  const requested = url.searchParams.get('tenantId')
+  const tenantId = tenantScope ?? (requested === null || requested === '' ? undefined : requested)
+  const sinceParam = url.searchParams.get('since')
+  const since = sinceParam === null ? undefined : new Date(sinceParam)
+  if (since !== undefined && Number.isNaN(since.getTime())) return invalidRequest()
+  const rows = await store.usageSummary({
+    ...tenantId === undefined ? {} : { tenantId },
+    ...since === undefined ? {} : { since },
+  })
+  const totals = rows.reduce((sum, row) => ({
+    events: sum.events + row.events,
+    inputTokens: sum.inputTokens + row.inputTokens,
+    outputTokens: sum.outputTokens + row.outputTokens,
+    computeMs: sum.computeMs + row.computeMs,
+    costMicrousd: sum.costMicrousd + row.costMicrousd,
+  }), { events: 0, inputTokens: 0, outputTokens: 0, computeMs: 0, costMicrousd: 0 })
+  return json({ rows, totals, since: since?.toISOString() ?? null })
+}
+
 async function auditEvents(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
   const requested = Number(url.searchParams.get('limit') ?? '100')
   const limit = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, 1000) : 100
@@ -728,6 +756,7 @@ async function dispatchAdmin(
     return customerInsights(store, tenantId)
   }
   if (resource === 'audit' && rest.length === 0 && method === 'GET') return auditEvents(store, tenantScope, url)
+  if (resource === 'usage' && rest.length === 0 && method === 'GET') return usageSummaryResponse(store, tenantScope, url)
   if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
     return updateUser(store, principal.user, tenantScope, decodeURIComponent(rest[0]), request)
   }

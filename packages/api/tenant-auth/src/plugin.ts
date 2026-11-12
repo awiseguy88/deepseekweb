@@ -167,7 +167,7 @@ export function apply(ctx: Context, config: Config): void {
         }
         const ok = migrationError === undefined
           && checks !== null
-          && checks.tenants && checks.deletedAt && checks.auditEvents && checks.billingEvents
+          && checks.tenants && checks.deletedAt && checks.auditEvents && checks.billingEvents && checks.usageEvents
         json(response, ok ? 200 : 503, {
           ok,
           migration: migrationError === undefined ? 'applied' : String(migrationError),

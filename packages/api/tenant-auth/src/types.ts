@@ -213,6 +213,40 @@ export interface TenantRoots {
   readonly failures: string
 }
 
+/** One append-only usage fact produced by a run. */
+export interface UsageEventInput {
+  readonly tenantId: string
+  readonly kind: 'llm' | 'compute' | 'storage' | 'tool'
+  readonly sessionId?: string
+  readonly provider?: string
+  readonly model?: string
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly computeMs?: number
+  readonly costMicrousd?: number
+  /** Idempotency key for retried producers; a duplicate insert is ignored. */
+  readonly idempotencyKey?: string
+}
+
+/** Aggregated usage for one tenant/kind/provider/model combination. */
+export interface UsageSummaryRow {
+  readonly tenantId: string
+  readonly kind: string
+  readonly provider: string | null
+  readonly model: string | null
+  readonly events: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly computeMs: number
+  readonly costMicrousd: number
+}
+
+/** One usage aggregation window. */
+export interface UsageSummaryFilter {
+  readonly tenantId?: string
+  readonly since?: Date
+}
+
 /** Database readiness evidence for the hosted health endpoint. */
 export interface TenantStoreHealth {
   /** The tenant table answers a query. */
@@ -223,6 +257,8 @@ export interface TenantStoreHealth {
   readonly auditEvents: boolean
   /** Migration 005/006's billing inbox and ordering column exist. */
   readonly billingEvents: boolean
+  /** Migration 007's usage metering table exists. */
+  readonly usageEvents: boolean
   /** The session-admission entitlement query binds and executes. */
   readonly sessionAdmission: boolean
 }
@@ -316,6 +352,10 @@ export interface TenantAuthStore {
    * @returns true when the delivery is stale and must not change tenant state.
    */
   billingEventIsStale(tenantId: string, eventCreated: Date | null): Promise<boolean>
+  /** Append one usage fact; a repeated idempotency key is ignored. */
+  recordUsageEvent(input: UsageEventInput): Promise<void>
+  /** Aggregate stored usage, optionally for one tenant and window. */
+  usageSummary(filter?: UsageSummaryFilter): Promise<readonly UsageSummaryRow[]>
   /** Revoke every live login session, optionally for one tenant or account. */
   revokeSessions(filter?: { readonly tenantId?: string; readonly userId?: string }): Promise<number>
   /** Delete revoked login-session rows, optionally for one tenant. */

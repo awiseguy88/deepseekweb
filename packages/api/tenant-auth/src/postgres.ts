@@ -20,6 +20,9 @@ import type {
   TenantSessionRecord,
   TenantUserRecord,
   TenantWorkspaceOwnerRecord,
+  UsageEventInput,
+  UsageSummaryFilter,
+  UsageSummaryRow,
 } from './types.ts'
 
 /** Minimal query surface, allowing the host to inject its approved Postgres driver. */
@@ -77,6 +80,18 @@ interface AuditRow extends Record<string, unknown> {
   target_id: string | null
   details: Readonly<Record<string, unknown>>
   created_at: Date
+}
+
+interface UsageRow extends Record<string, unknown> {
+  tenant_id: string
+  kind: string
+  provider: string | null
+  model: string | null
+  events: number | string
+  input_tokens: number | string
+  output_tokens: number | string
+  compute_ms: number | string
+  cost_microusd: number | string
 }
 
 interface AccountRow extends Record<string, unknown> {
@@ -589,7 +604,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
     return result.rows.length
   }
 
-  async health(): Promise<{ tenants: boolean; deletedAt: boolean; auditEvents: boolean; billingEvents: boolean; sessionAdmission: boolean }> {
+  async health(): Promise<{ tenants: boolean; deletedAt: boolean; auditEvents: boolean; billingEvents: boolean; usageEvents: boolean; sessionAdmission: boolean }> {
     const check = async (sql: string, parameters: readonly unknown[] = []): Promise<boolean> => {
       try {
         await this.db.query(sql, parameters)
@@ -604,6 +619,7 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       deletedAt: await check('SELECT deleted_at FROM wiseai_tenants LIMIT 1'),
       auditEvents: await check('SELECT event_id FROM wiseai_audit_events LIMIT 1'),
       billingEvents: await check('SELECT target_tenant_id FROM wiseai_billing_events LIMIT 1'),
+      usageEvents: await check('SELECT usage_id FROM wiseai_usage_events LIMIT 1'),
       sessionAdmission: await check(
         `SELECT 1 FROM wiseai_tenants AS t
           WHERE t.tenant_id IS NULL
@@ -783,6 +799,57 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       [tenantId, eventCreated],
     )
     return result.rows.length > 0
+  }
+
+  async recordUsageEvent(input: UsageEventInput): Promise<void> {
+    await this.db.query(
+      `INSERT INTO wiseai_usage_events
+         (usage_id, tenant_id, session_id, kind, provider, model, input_tokens, output_tokens, compute_ms, cost_microusd, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [
+        randomUUID(), input.tenantId, input.sessionId ?? null, input.kind, input.provider ?? null,
+        input.model ?? null, input.inputTokens ?? 0, input.outputTokens ?? 0, input.computeMs ?? 0,
+        input.costMicrousd ?? 0, input.idempotencyKey ?? null,
+      ],
+    )
+  }
+
+  async usageSummary(filter: UsageSummaryFilter = {}): Promise<readonly UsageSummaryRow[]> {
+    const conditions: string[] = []
+    const parameters: unknown[] = []
+    if (filter.tenantId !== undefined) {
+      parameters.push(filter.tenantId)
+      conditions.push(`tenant_id = $${parameters.length}`)
+    }
+    if (filter.since !== undefined) {
+      parameters.push(filter.since)
+      conditions.push(`created_at >= $${parameters.length}`)
+    }
+    const result = await this.db.query<UsageRow>(
+      `SELECT tenant_id, kind, provider, model,
+              COUNT(*)::int AS events,
+              COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+              COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+              COALESCE(SUM(compute_ms), 0)::bigint AS compute_ms,
+              COALESCE(SUM(cost_microusd), 0)::bigint AS cost_microusd
+         FROM wiseai_usage_events
+         ${conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`}
+        GROUP BY tenant_id, kind, provider, model
+        ORDER BY tenant_id, kind, provider, model`,
+      parameters,
+    )
+    return result.rows.map(row => ({
+      tenantId: row.tenant_id,
+      kind: row.kind,
+      provider: row.provider,
+      model: row.model,
+      events: Number(row.events),
+      inputTokens: Number(row.input_tokens),
+      outputTokens: Number(row.output_tokens),
+      computeMs: Number(row.compute_ms),
+      costMicrousd: Number(row.cost_microusd),
+    }))
   }
 
   async listSessionOwners(): Promise<readonly TenantSessionOwnerRecord[]> {

@@ -143,6 +143,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
   <button type="button" class="tab" id="tab-sessions" role="tab" aria-controls="panel-sessions" aria-selected="false" tabindex="-1" data-tab="sessions">Sessions</button>
   <button type="button" class="tab" id="tab-sales" role="tab" aria-controls="panel-sales" aria-selected="false" tabindex="-1" data-tab="sales">Sales</button>
   <button type="button" class="tab" id="tab-audit" role="tab" aria-controls="panel-audit" aria-selected="false" tabindex="-1" data-tab="audit">Security &amp; audit</button>
+  <button type="button" class="tab" id="tab-usage" role="tab" aria-controls="panel-usage" aria-selected="false" tabindex="-1" data-tab="usage">Usage &amp; costs</button>
 </nav>
 <main id="main">
   <h2 class="workspace-heading" id="workspace-heading" hidden></h2>
@@ -232,6 +233,15 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     <p class="state" id="audit-status" role="status"></p>
     <p class="muted small" id="audit-summary"></p>
     <div class="card"><div id="audit-events"></div></div>
+  </section>
+  <section class="panel" id="panel-usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" hidden>
+    <div class="panel-head">
+      <div><h2>Usage &amp; costs</h2><p class="muted">Stored token, compute, and cost facts per customer.</p></div>
+      <button type="button" class="btn ghost" id="usage-refresh">Refresh</button>
+    </div>
+    <p class="state" id="usage-status" role="status"></p>
+    <p class="muted small" id="usage-summary"></p>
+    <div class="card"><div id="usage-table"></div></div>
   </section>
 </main>
 <dialog id="new-customer-dialog" class="dialog" aria-labelledby="new-customer-title">
@@ -336,7 +346,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
 (function () {
   'use strict';
 
-  var TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales', 'audit'];
+  var TABS = ['overview', 'customers', 'users', 'support', 'sessions', 'sales', 'audit', 'usage'];
   var state = {
     tab: 'overview',
     me: null,
@@ -566,6 +576,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     else if (name === 'sessions') loadSessions();
     else if (name === 'sales') loadSales();
     else if (name === 'audit') loadAudit();
+    else if (name === 'usage') loadUsage();
   }
 
   function applyTenantAdmin(me) {
@@ -1158,6 +1169,42 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     host.appendChild(buildTable(['Time', 'Actor', 'Action', 'Target', 'Details'], rows, 'No audit events recorded yet.'));
   }
 
+  function loadUsage() {
+    beginLoad('panel-usage', 'usage-status');
+    api('/admin/api/usage').then(function (payload) {
+      endLoad('panel-usage', 'usage-status');
+      renderUsage(payload || {});
+    }).catch(function (error) {
+      endLoad('panel-usage', 'usage-status');
+      failLoad('usage-status', error, loadUsage);
+    });
+  }
+
+  function renderUsage(payload) {
+    var rows = payload.rows || [];
+    var totals = payload.totals || {};
+    $('usage-summary').textContent = rows.length + ' groups · ' + (totals.events || 0) + ' events · $' + ((totals.costMicrousd || 0) / 1000000).toFixed(2) + ' recorded cost';
+    var tableRows = rows.map(function (row) {
+      return [
+        row.tenantId,
+        row.kind,
+        (row.provider || '—') + (row.model ? ' / ' + row.model : ''),
+        String(row.events),
+        String(row.inputTokens),
+        String(row.outputTokens),
+        (row.computeMs / 1000).toFixed(1),
+        '$' + (row.costMicrousd / 1000000).toFixed(4)
+      ];
+    });
+    var host = $('usage-table');
+    clear(host);
+    host.appendChild(buildTable(
+      ['Customer', 'Kind', 'Provider / model', 'Events', 'Input tokens', 'Output tokens', 'Compute (s)', 'Cost (USD)'],
+      tableRows,
+      'No usage recorded yet. Metering records facts as runs produce them.'
+    ));
+  }
+
   function loadSales() {
     beginLoad('panel-sales', 'sales-status');
     api('/admin/api/sales').then(function (payload) {
@@ -1265,6 +1312,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     $('customer-delete').addEventListener('click', deleteCustomer);
     $('sales-refresh').addEventListener('click', loadSales);
     $('audit-refresh').addEventListener('click', loadAudit);
+    $('usage-refresh').addEventListener('click', loadUsage);
     Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (button) {
       button.addEventListener('click', function () { closeDialog(button.getAttribute('data-close')); });
     });

@@ -606,8 +606,31 @@ describe('sales ledger', () => {
     expect(finished.calls[0]?.sql).toContain('processed_at = CASE')
   })
 
-  it('orders billing events by Stripe creation time per tenant', async () => {
-    const noted = new ScriptedDatabase().next()
+  it('records idempotent usage facts and aggregates them', async () => {
+    const recorded = new ScriptedDatabase().next()
+    await storeWith(recorded).recordUsageEvent({
+      tenantId: 'tenant-1', kind: 'llm', provider: 'deepseek', model: 'flash',
+      inputTokens: 1200, outputTokens: 300, costMicrousd: 2500, idempotencyKey: 'run-1:llm',
+    })
+    expect(recorded.calls[0]?.sql).toContain('ON CONFLICT (idempotency_key) DO NOTHING')
+    expect(recorded.calls[0]?.parameters.slice(1)).toEqual([
+      'tenant-1', null, 'llm', 'deepseek', 'flash', 1200, 300, 0, 2500, 'run-1:llm',
+    ])
+
+    const aggregate = new ScriptedDatabase().next([{
+      tenant_id: 'tenant-1', kind: 'llm', provider: 'deepseek', model: 'flash',
+      events: 2, input_tokens: '1200', output_tokens: '300', compute_ms: '4000', cost_microusd: '2500',
+    }])
+    const rows = await storeWith(aggregate).usageSummary({ tenantId: 'tenant-1', since: new Date('2026-01-01T00:00:00.000Z') })
+    expect(rows).toEqual([{
+      tenantId: 'tenant-1', kind: 'llm', provider: 'deepseek', model: 'flash',
+      events: 2, inputTokens: 1200, outputTokens: 300, computeMs: 4000, costMicrousd: 2500,
+    }])
+    expect(aggregate.calls[0]?.sql).toContain('GROUP BY tenant_id, kind, provider, model')
+    expect(aggregate.calls[0]?.parameters).toEqual(['tenant-1', new Date('2026-01-01T00:00:00.000Z')])
+  })
+
+  it('orders billing events by Stripe creation time per tenant', async () => {    const noted = new ScriptedDatabase().next()
     await storeWith(noted).noteBillingEventTenant('evt-1', 'tenant-1')
     expect(noted.calls[0]?.parameters).toEqual(['evt-1', 'tenant-1'])
 
