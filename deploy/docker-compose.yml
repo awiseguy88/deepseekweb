@@ -1,0 +1,53 @@
+name: wiseai
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file: .env
+    expose:
+      - "8080"
+    volumes:
+      - /data/wiseai:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Tenant child processes are wrapped with bwrap; it needs user namespaces.
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - SYS_ADMIN
+    group_add:
+      - "1000"
+
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: wiseai
+      POSTGRES_DB: wiseai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wiseai -d wiseai"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      WISEAI_DOMAIN: ${WISEAI_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /data/caddy:/data
+      - /data/caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
