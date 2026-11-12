@@ -3,14 +3,22 @@
 # Run as root on a fresh server: sh deploy/bootstrap.sh
 set -eu
 
+# Never prompt: the script runs over a non-interactive SSH session, and
+# needrestart/perl debconf prompts otherwise block apt indefinitely.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+APT_OPTS='-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold'
+
 if [ "$(id -u)" -ne 0 ]; then
   echo 'run as root' >&2
   exit 1
 fi
 
 apt-get update
-apt-get -y upgrade
-apt-get -y install ca-certificates curl git ufw fail2ban unattended-upgrades rsync
+# shellcheck disable=SC2086
+apt-get -y $APT_OPTS upgrade
+# shellcheck disable=SC2086
+apt-get -y $APT_OPTS install ca-certificates curl git ufw fail2ban unattended-upgrades rsync
 
 # Docker Engine + compose plugin.
 if ! command -v docker >/dev/null 2>&1; then
