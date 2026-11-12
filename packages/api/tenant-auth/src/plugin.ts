@@ -15,6 +15,7 @@ import { handleAccountApi } from './account-http.ts'
 import { renderAccountPage } from './account-page.ts'
 import { parseStripeEvent, stripeConfig, summarizeStripeEvent, verifyStripeSignature } from './stripe.ts'
 import { createTenantAccess } from './tenant-access.ts'
+import { createTenantPaths } from './tenant-paths.ts'
 
 /** Cordis configuration for the hosted WiseAI tenant auth routes. */
 export interface Config {
@@ -89,6 +90,7 @@ export function apply(ctx: Context, config: Config): void {
   // Session and Workspace controllers claim through. Start after the schema
   // settles so the ownership tables exist for the first hydration.
   const access = createTenantAccess({ ctx, store })
+  ctx.effect(() => ctx.provide('tenantPaths', createTenantPaths()), 'wiseai-tenant-auth: tenant paths')
   ctx.inject(['typert', 'remoteAccess'], () => {
     void migration.then(() => access.start()).catch((error: unknown) => {
       console.error('[wiseai-tenant-auth] tenant access policy failed:', error)

@@ -3,7 +3,7 @@
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { Remote, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-api-remote-access'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { WorkspaceCommands } from './commands.ts'
@@ -109,6 +109,14 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('create')
   async create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
+    const principal = principalOf(this.ctx.invocation)
+    const paths = this.ctx.get('tenantPaths')
+    if (principal?.kind === 'tenant' && paths !== undefined) {
+      await paths.ensure(principal.tenantId)
+      if (!(await paths.contains(principal.tenantId, request.path))) {
+        throw new RemoteError('gateway/bad-request', 'workspace path is confined to the tenant workspace', {})
+      }
+    }
     const value = await this.commands.create(request)
     if (value.created) await this.claimWorkspaceOwnership(value.workspace.workspaceId)
     return value
@@ -150,6 +158,7 @@ export class WorkspaceController extends TypertRemoteService {
       return tenant === undefined ? root : join(root, 'tenants', tenant.tenantId)
     })
     if (workspace === undefined) return undefined
+    if (tenant !== undefined) await this.ctx.get('tenantPaths')?.ensure(tenant.tenantId)
     await this.claimWorkspaceOwnership(workspace.id)
     return { workspace: workspaceView(workspace) }
   }

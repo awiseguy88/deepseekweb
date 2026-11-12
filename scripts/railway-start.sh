@@ -26,6 +26,14 @@ if [ "${WISEAI_AUTH_REQUIRED:-0}" = "1" ]; then
   export WISEAI_WORKSPACE_ROOT
   : "${WISEAI_RECOVER_MISSING_CWD:=1}"
   export WISEAI_RECOVER_MISSING_CWD
+  # Per-tenant roots live on the mounted volume; only the service user may
+  # traverse the parent, and each tenant directory is created mode 700.
+  : "${WISEAI_DOCUMENTS_DIR:=/data/workspaces}"
+  mkdir -p "$WISEAI_DOCUMENTS_DIR/tenants"
+  chmod 711 "$WISEAI_DOCUMENTS_DIR" 2>/dev/null || true
+  chmod 711 "$WISEAI_DOCUMENTS_DIR/tenants" 2>/dev/null || true
+  : "${WISEAI_TENANT_ROOT:=$WISEAI_DOCUMENTS_DIR/tenants}"
+  export WISEAI_DOCUMENTS_DIR WISEAI_TENANT_ROOT
 fi
 
 public_url="${DSH_WEB_PUBLIC_URL:-}"

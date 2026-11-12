@@ -168,6 +168,10 @@
     # Workspace commands and reconnect-safe projection over Typert Remote.
     - id: workspace-controller
       name: '@deepseek-ai/dsh-api-workspace-controller'
+      config:
+        # Tenant default workspaces live below the mounted volume; the controller
+        # appends 'tenants/<tenantId>' for tenant callers.
+        documentsDirectory: !!js process.env.WISEAI_DOCUMENTS_DIR ?? '/data/workspaces'
 
     - id: cordis-host-runner
       name: '@deepseek-ai/dsh-cordis-host-runner'

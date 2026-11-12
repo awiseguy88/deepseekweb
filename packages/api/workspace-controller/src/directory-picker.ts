@@ -12,8 +12,22 @@ import type {
 // The seam owns the listing declaration; the generator requires the reference
 // site to name that package rather than this package's re-export of it.
 import type { DirectoryListing } from '@deepseek-ai/dsh-host-directory-picker/types'
-import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { RemoteErrorCode } from '@deepseek-ai/dsh-typert-protocol'
+
+/** The tenant path policy provided by the hosted tenant-auth composition. */
+interface TenantPathPolicy {
+  root(tenantId: string): string
+  ensure(tenantId: string): Promise<string>
+  contains(tenantId: string, candidate: string): Promise<boolean>
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Absent when the deployment does not partition the filesystem by tenant. */
+    tenantPaths?: TenantPathPolicy
+  }
+}
 
 const createDirectoryRequestSchema = z.object({
   path: z.string(),
@@ -53,6 +67,12 @@ export class DirectoryPickerController extends TypertRemoteService {
    */
   @Remote('pick')
   async pick(signal: AbortSignal): Promise<string | null> {
+    // The OS chooser can reach the whole host filesystem, so a tenant caller
+    // never gets it; the in-app browser is scoped to the tenant root instead.
+    if (await this.tenantScope() !== undefined) {
+      throw new RemoteError('gateway/bad-request', 'the native directory picker is unavailable for tenant sessions', {})
+    }
+    if (signal.aborted) throw cancellableFailure(new Error('aborted'), signal, 'directory picker was aborted', 'directory picker failed')
     const capability = this.requireCapability('native', 'pick')
     try {
       return await capability.pick(signal)
@@ -70,6 +90,14 @@ export class DirectoryPickerController extends TypertRemoteService {
    */
   @Remote('list')
   async list(path: string | undefined, signal: AbortSignal): Promise<DirectoryListing> {
+    const scope = await this.tenantScope()
+    if (scope !== undefined) {
+      if (path !== undefined && !(await scope.paths.contains(scope.tenantId, path))) {
+        throw new RemoteError('gateway/bad-request', 'directory listing is confined to the tenant workspace', {})
+      }
+      path = path ?? scope.root
+    }
+    if (signal.aborted) throw cancellableFailure(new Error('aborted'), signal, 'directory listing was aborted')
     const capability = this.requireCapability('browse', 'list')
     try {
       return await capability.list(path, signal)
@@ -94,12 +122,25 @@ export class DirectoryPickerController extends TypertRemoteService {
         { issues: request.error.issues },
       )
     }
+    const scope = await this.tenantScope()
+    if (scope !== undefined && !(await scope.paths.contains(scope.tenantId, request.data.path))) {
+      throw new RemoteError('gateway/bad-request', 'directory creation is confined to the tenant workspace', {})
+    }
     const capability = this.requireCapability('browse', 'createDirectory')
     try {
       return await capability.createDirectory(request.data.path, request.data.name)
     } catch (error: unknown) {
       throw browseFailure(error)
     }
+  }
+
+  /** Resolve the caller's tenant confinement, or undefined for non-tenant callers. */
+  private async tenantScope(): Promise<{ readonly paths: TenantPathPolicy; readonly tenantId: string; readonly root: string } | undefined> {
+    const principal = principalOf(this.ctx.invocation)
+    if (principal?.kind !== 'tenant') return undefined
+    const paths = this.ctx.get('tenantPaths')
+    if (paths === undefined) return undefined
+    return { paths, tenantId: principal.tenantId, root: await paths.ensure(principal.tenantId) }
   }
 
   /** Resolve the capability one wire verb needs, or refuse with the kind this backend serves. */

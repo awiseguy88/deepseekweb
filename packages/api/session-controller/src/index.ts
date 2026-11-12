@@ -94,7 +94,16 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Host Session business API and Remote namespace owner. */
     sessionController: SessionController
+    /** Absent when the deployment does not partition the filesystem by tenant. */
+    tenantPaths?: TenantPathPolicy
   }
+}
+
+/** The tenant path policy provided by the hosted tenant-auth composition. */
+interface TenantPathPolicy {
+  root(tenantId: string): string
+  ensure(tenantId: string): Promise<string>
+  contains(tenantId: string, candidate: string): Promise<boolean>
 }
 
 /**
@@ -324,6 +333,18 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote({ name: 'create', resources: { session: () => undefined } })
   async create(request: SessionCreateRequest): Promise<SessionCreateValue> {
+    const principal = principalOf(this.ctx.invocation)
+    const paths = this.ctx.get('tenantPaths')
+    if (principal?.kind === 'tenant' && paths !== undefined) {
+      if (request.cwd !== undefined) {
+        await paths.ensure(principal.tenantId)
+        if (!(await paths.contains(principal.tenantId, request.cwd))) {
+          throw new RemoteError('gateway/bad-request', 'session directory is confined to the tenant workspace', {})
+        }
+      } else if (request.workspaceId === undefined) {
+        request = { ...request, cwd: await paths.ensure(principal.tenantId) }
+      }
+    }
     const value = await this.commands.create(request)
     await this.claimSessionOwnership(value.sessionId)
     return value
