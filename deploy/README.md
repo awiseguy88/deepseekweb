@@ -94,11 +94,14 @@ private root below `/data/customers/<slug>`, one port, one Caddy subdomain.
 
 ## 6. Operations
 
-- **Backups:** run restic to Cloudflare R2/Backblaze B2 on a cron:
-  `restic -r s3:... backup /data/wiseai /data/postgres`. Keep Postgres dumps
-  separately (`docker compose exec postgres pg_dump -U wiseai wiseai`).
+- **Backups:** `deploy/backup.sh` writes a custom-format `pg_dump` and a tar of
+  `/data/wiseai` to `/data/backups`, deleting files older than seven days. It is
+  installed in root's crontab at 03:30 daily. Off-site copies still need restic
+  to Cloudflare R2/Backblaze B2.
+- **Updates over SSH:** the server has a read-only GitHub deploy key and
+  `/opt/wiseai` is a git checkout. After adding the deploy key to the repo:
+  `sudo -u deploy git -C /opt/wiseai pull --ff-only && cd /opt/wiseai/deploy && docker compose up -d --build`.
 - **Disk:** alert at 80% (`df -h /data`); a runaway agent can fill the volume.
   Consider per-tenant quotas later.
-- **Updates:** `git -C /opt/wiseai pull && cd deploy && docker compose up -d --build`.
 - **Logs:** `docker compose logs -f app`; readiness is `GET /healthz`.
 - **Secrets:** `.env` is not committed; keep a copy in a password manager.
