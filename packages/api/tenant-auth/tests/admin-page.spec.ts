@@ -29,7 +29,8 @@ describe('renderAdminPage', () => {
     expect(html.match(/role="tab"/g)).toHaveLength(TABS.length)
     expect(html.match(/role="tabpanel"/g)).toHaveLength(TABS.length)
     expect(html).toContain('id="audit-events"')
-    expect(html).toContain('/admin/api/audit')
+    expect(html).toContain('id="customer-activity"')
+    expect(html).toContain('/insights')
     for (const tab of TABS) {
       expect(html).toContain(`id="tab-${tab}"`)
       expect(html).toContain(`id="panel-${tab}"`)

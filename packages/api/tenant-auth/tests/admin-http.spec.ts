@@ -691,6 +691,27 @@ describe('overview and customers', () => {
     }])
   })
 
+  it('summarizes stored customer activity for the Customer 360 view', async () => {
+    const store = signedIn(new FakeStore())
+    store.tenants = [tenantRecord()]
+    store.accounts = [accountRecord(), accountRecord({ userId: 'user-2', lastSeenAt: new Date('2026-05-01T00:00:00.000Z') })]
+    store.sessionLists = [
+      sessionListRecord({ expiresAt: new Date('2027-01-01T00:00:00.000Z') }),
+      sessionListRecord({ sessionId: 'session-2', revokedAt: new Date('2026-01-01T00:00:00.000Z') }),
+    ]
+    const response = await adminApiResponse(store, request('/admin/api/customers/tenant-a/insights'))
+    expect(response.status).toBe(200)
+    const body = await response.json() as { metrics: Record<string, unknown> }
+    expect(body.metrics).toMatchObject({
+      users: 2,
+      activeSessions: 1,
+      revokedSessions: 1,
+      totalSessions: 2,
+      auditEvents: 0,
+      lastSeenAt: '2026-05-01T00:00:00.000Z',
+    })
+  })
+
   it('rejects invalid customer patches and reports a missing tenant', async () => {
     const store = signedIn(new FakeStore())
     store.tenants = [tenantRecord()]

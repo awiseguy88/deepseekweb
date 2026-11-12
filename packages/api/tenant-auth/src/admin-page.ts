@@ -277,6 +277,10 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
       <h3 id="customer-sessions-title">Sessions</h3>
       <div id="customer-sessions"></div>
     </section>
+    <section class="detail-section" aria-labelledby="customer-activity-title">
+      <h3 id="customer-activity-title">Activity</h3>
+      <div id="customer-activity"></div>
+    </section>
   </div>
 </dialog>
 <dialog id="add-user-dialog" class="dialog" aria-labelledby="add-user-title">
@@ -839,6 +843,39 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     var sessionsHost = $('customer-sessions');
     clear(sessionsHost);
     sessionsHost.appendChild(buildTable(['Session', 'User', 'Created', 'Expires', 'Status', ''], sessionRows, 'No sessions recorded for this customer.'));
+    loadCustomerInsights(customer.tenantId);
+  }
+
+  function loadCustomerInsights(tenantId) {
+    var host = $('customer-activity');
+    clear(host);
+    host.appendChild(make('p', 'muted small', 'Loading activity…'));
+    api('/admin/api/customers/' + encodeURIComponent(tenantId) + '/insights').then(function (payload) {
+      renderCustomerInsights(payload || {});
+    }).catch(function (error) {
+      clear(host);
+      host.appendChild(make('p', 'state error', 'Could not load activity: ' + error.message));
+    });
+  }
+
+  function renderCustomerInsights(payload) {
+    var host = $('customer-activity');
+    clear(host);
+    var metrics = payload.metrics || {};
+    host.appendChild(buildTable(['Metric', 'Value'], [
+      ['Users', String(metrics.users || 0)],
+      ['Active sessions', String(metrics.activeSessions || 0)],
+      ['Revoked sessions', String(metrics.revokedSessions || 0)],
+      ['Audit events (recent)', String(metrics.auditEvents || 0)],
+      ['Last seen', metrics.lastSeenAt ? formatDate(metrics.lastSeenAt) : '—']
+    ], 'No activity recorded yet.'));
+    var events = payload.recentAudit || [];
+    if (events.length > 0) {
+      host.appendChild(make('h4', 'small muted', 'Recent audit'));
+      host.appendChild(buildTable(['Time', 'Actor', 'Action'], events.map(function (event) {
+        return [formatDate(event.createdAt), event.actorUserId, event.action];
+      }), 'No audit events yet.'));
+    }
   }
 
   function saveCustomerProfile(event) {

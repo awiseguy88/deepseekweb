@@ -346,6 +346,41 @@ async function auditEvents(store: TenantAuthStore, tenantScope: string | undefin
   return json({ events })
 }
 
+/**
+ * Real, stored activity summary for one customer (the Customer 360 panel).
+ * Every value comes from the identity store; nothing is estimated.
+ * @param store - tenant identity store.
+ * @param tenantId - the customer to summarize.
+ * @returns the customer, derived counts, and the newest audit events.
+ */
+async function customerInsights(store: TenantAuthStore, tenantId: string): Promise<Response> {
+  const customer = await store.findTenantById(tenantId)
+  if (customer === null) return notFound()
+  const [accounts, sessions, audit] = await Promise.all([
+    store.listAccounts(tenantId),
+    store.listSessions({ tenantId }),
+    store.listAuditEvents({ tenantId, limit: 10 }),
+  ])
+  const now = Date.now()
+  const activeSessions = sessions.filter(session => session.revokedAt === null && new Date(session.expiresAt).getTime() > now).length
+  const lastSeenAt = accounts.reduce<Date | null>((latest, account) => {
+    if (account.lastSeenAt === null) return latest
+    return latest === null || account.lastSeenAt.getTime() > latest.getTime() ? account.lastSeenAt : latest
+  }, null)
+  return json({
+    customer,
+    metrics: {
+      users: accounts.length,
+      activeSessions,
+      revokedSessions: sessions.length - activeSessions,
+      totalSessions: sessions.length,
+      auditEvents: audit.length,
+      lastSeenAt,
+    },
+    recentAudit: audit,
+  })
+}
+
 async function updateCustomer(store: TenantAuthStore, actor: TenantUserRecord, tenantId: string, request: Request): Promise<Response> {
   const body = await readBody(request)
   if ('response' in body) return body.response
@@ -686,6 +721,11 @@ async function dispatchAdmin(
   if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'delete' && method === 'POST') {
     if (tenantScope !== undefined) return forbidden()
     return customerSoftDelete(store, principal.user, decodeURIComponent(rest[0]), request)
+  }
+  if (resource === 'customers' && rest.length === 2 && rest[0] !== undefined && rest[1] === 'insights' && method === 'GET') {
+    const tenantId = decodeURIComponent(rest[0])
+    if (tenantScope !== undefined && tenantId !== tenantScope) return forbidden()
+    return customerInsights(store, tenantId)
   }
   if (resource === 'audit' && rest.length === 0 && method === 'GET') return auditEvents(store, tenantScope, url)
   if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
