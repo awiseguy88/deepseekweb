@@ -213,6 +213,19 @@ export interface TenantRoots {
   readonly failures: string
 }
 
+/** One billing-inbox row shown in the admin dead-letter view. */
+export interface BillingEventRecord {
+  readonly eventId: string
+  readonly eventType: string
+  readonly status: 'processing' | 'processed' | 'failed'
+  readonly attempts: number
+  readonly lastError: string | null
+  readonly eventCreated: Date | null
+  readonly receivedAt: Date
+  readonly processedAt: Date | null
+  readonly targetTenantId: string | null
+}
+
 /** One append-only usage fact produced by a run. */
 export interface UsageEventInput {
   readonly tenantId: string
@@ -352,6 +365,8 @@ export interface TenantAuthStore {
    * @returns true when the delivery is stale and must not change tenant state.
    */
   billingEventIsStale(tenantId: string, eventCreated: Date | null): Promise<boolean>
+  /** Read billing-inbox rows for the admin dead-letter view. */
+  listBillingEvents(filter?: { readonly status?: string; readonly tenantId?: string; readonly limit?: number }): Promise<readonly BillingEventRecord[]>
   /** Append one usage fact; a repeated idempotency key is ignored. */
   recordUsageEvent(input: UsageEventInput): Promise<void>
   /** Aggregate stored usage, optionally for one tenant and window. */

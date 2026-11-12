@@ -367,6 +367,24 @@ async function usageSummaryResponse(store: TenantAuthStore, tenantScope: string 
   return json({ rows, totals, since: since?.toISOString() ?? null })
 }
 
+/**
+ * Read billing-inbox rows for the admin dead-letter view. A tenant administrator
+ * only sees events whose resolved tenant is its own.
+ * @param store - tenant identity store.
+ * @param tenantScope - the caller's tenant, or undefined for the platform operator.
+ * @param url - request URL with optional `status` filter.
+ * @returns the newest inbox rows.
+ */
+async function billingEvents(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
+  const status = url.searchParams.get('status') ?? undefined
+  const events = await store.listBillingEvents({
+    ...status === undefined || status === '' ? {} : { status },
+    ...tenantScope === undefined ? {} : { tenantId: tenantScope },
+    limit: 100,
+  })
+  return json({ events })
+}
+
 async function auditEvents(store: TenantAuthStore, tenantScope: string | undefined, url: URL): Promise<Response> {
   const requested = Number(url.searchParams.get('limit') ?? '100')
   const limit = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, 1000) : 100
@@ -757,6 +775,7 @@ async function dispatchAdmin(
   }
   if (resource === 'audit' && rest.length === 0 && method === 'GET') return auditEvents(store, tenantScope, url)
   if (resource === 'usage' && rest.length === 0 && method === 'GET') return usageSummaryResponse(store, tenantScope, url)
+  if (resource === 'billing' && rest.length === 1 && rest[0] === 'events' && method === 'GET') return billingEvents(store, tenantScope, url)
   if (resource === 'users' && rest.length === 1 && rest[0] !== undefined && method === 'POST') {
     return updateUser(store, principal.user, tenantScope, decodeURIComponent(rest[0]), request)
   }

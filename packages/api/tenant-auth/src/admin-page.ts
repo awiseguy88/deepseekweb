@@ -224,6 +224,9 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     <div class="warning" id="sales-warning" hidden></div>
     <p class="muted small" id="sales-summary"></p>
     <div class="card"><div id="sales-events"></div></div>
+    <h3 class="small muted">Billing inbox</h3>
+    <p class="muted small" id="billing-summary"></p>
+    <div class="card"><div id="billing-events"></div></div>
   </section>
   <section class="panel" id="panel-audit" role="tabpanel" aria-labelledby="tab-audit" tabindex="0" hidden>
     <div class="panel-head">
@@ -1141,6 +1144,34 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
     });
   }
 
+  function loadBillingEvents() {
+    api('/admin/api/billing/events').then(function (payload) {
+      renderBillingEvents(payload || {});
+    }).catch(function (error) {
+      var host = $('billing-events');
+      clear(host);
+      host.appendChild(make('p', 'state error', 'Could not load the billing inbox: ' + error.message));
+    });
+  }
+
+  function renderBillingEvents(payload) {
+    var events = payload.events || [];
+    $('billing-summary').textContent = events.length + ' billing events.';
+    var rows = events.map(function (event) {
+      return [
+        formatDate(event.receivedAt),
+        event.eventType,
+        event.targetTenantId || '—',
+        badge(event.status, event.status === 'failed' ? 'danger' : (event.status === 'processed' ? 'ok' : 'neutral')),
+        String(event.attempts),
+        make('span', 'mono small', event.lastError || '—')
+      ];
+    });
+    var host = $('billing-events');
+    clear(host);
+    host.appendChild(buildTable(['Received', 'Event', 'Tenant', 'Status', 'Attempts', 'Last error'], rows, 'No billing events recorded yet.'));
+  }
+
   function loadAudit() {
     beginLoad('panel-audit', 'audit-status');
     api('/admin/api/audit').then(function (payload) {
@@ -1207,6 +1238,7 @@ dialog::backdrop{background:rgba(4,5,4,.72);backdrop-filter:blur(2px)}
 
   function loadSales() {
     beginLoad('panel-sales', 'sales-status');
+    loadBillingEvents();
     api('/admin/api/sales').then(function (payload) {
       endLoad('panel-sales', 'sales-status');
       renderSales(payload || {});

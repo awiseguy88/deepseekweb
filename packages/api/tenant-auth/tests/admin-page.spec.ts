@@ -32,6 +32,7 @@ describe('renderAdminPage', () => {
     expect(html).toContain('id="customer-activity"')
     expect(html).toContain('id="usage-table"')
     expect(html).toContain('/admin/api/usage')
+    expect(html).toContain('id="billing-events"')
     for (const tab of TABS) {
       expect(html).toContain(`id="tab-${tab}"`)
       expect(html).toContain(`id="panel-${tab}"`)

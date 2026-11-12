@@ -3,6 +3,7 @@ import type {
   AuditEventInput,
   AuditEventRecord,
   BillingEventInput,
+  BillingEventRecord,
   ClaimSessionOwnerInput,
   ClaimWorkspaceOwnerInput,
   SalesEventInput,
@@ -80,6 +81,18 @@ interface AuditRow extends Record<string, unknown> {
   target_id: string | null
   details: Readonly<Record<string, unknown>>
   created_at: Date
+}
+
+interface BillingEventRow extends Record<string, unknown> {
+  event_id: string
+  event_type: string
+  status: 'processing' | 'processed' | 'failed'
+  attempts: number
+  last_error: string | null
+  event_created: Date | null
+  received_at: Date
+  processed_at: Date | null
+  target_tenant_id: string | null
 }
 
 interface UsageRow extends Record<string, unknown> {
@@ -799,6 +812,40 @@ export class PostgresTenantAuthStore implements TenantAuthStore {
       [tenantId, eventCreated],
     )
     return result.rows.length > 0
+  }
+
+  async listBillingEvents(filter: { readonly status?: string; readonly tenantId?: string; readonly limit?: number } = {}): Promise<readonly BillingEventRecord[]> {
+    const conditions: string[] = []
+    const parameters: unknown[] = []
+    if (filter.status !== undefined) {
+      parameters.push(filter.status)
+      conditions.push(`status = $${parameters.length}`)
+    }
+    if (filter.tenantId !== undefined) {
+      parameters.push(filter.tenantId)
+      conditions.push(`target_tenant_id = $${parameters.length}`)
+    }
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 500)
+    parameters.push(limit)
+    const result = await this.db.query<BillingEventRow>(
+      `SELECT event_id, event_type, status, attempts, last_error, event_created, received_at, processed_at, target_tenant_id
+         FROM wiseai_billing_events
+         ${conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`}
+        ORDER BY received_at DESC, event_id DESC
+        LIMIT $${parameters.length}`,
+      parameters,
+    )
+    return result.rows.map(row => ({
+      eventId: row.event_id,
+      eventType: row.event_type,
+      status: row.status,
+      attempts: row.attempts,
+      lastError: row.last_error,
+      eventCreated: row.event_created,
+      receivedAt: row.received_at,
+      processedAt: row.processed_at,
+      targetTenantId: row.target_tenant_id,
+    }))
   }
 
   async recordUsageEvent(input: UsageEventInput): Promise<void> {

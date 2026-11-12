@@ -606,6 +606,18 @@ describe('sales ledger', () => {
     expect(finished.calls[0]?.sql).toContain('processed_at = CASE')
   })
 
+  it('lists billing inbox rows for the dead-letter view', async () => {
+    const db = new ScriptedDatabase().next([{
+      event_id: 'evt-1', event_type: 'invoice.paid', status: 'failed', attempts: 2, last_error: 'db down',
+      event_created: new Date('2026-01-01T00:00:00.000Z'), received_at: new Date('2026-01-02T00:00:00.000Z'),
+      processed_at: null, target_tenant_id: 'tenant-1',
+    }])
+    const rows = await storeWith(db).listBillingEvents({ status: 'failed', tenantId: 'tenant-1', limit: 10 })
+    expect(rows[0]).toMatchObject({ eventId: 'evt-1', status: 'failed', attempts: 2, targetTenantId: 'tenant-1', lastError: 'db down' })
+    expect(db.calls[0]?.sql).toContain('WHERE status = $1 AND target_tenant_id = $2')
+    expect(db.calls[0]?.parameters).toEqual(['failed', 'tenant-1', 10])
+  })
+
   it('records idempotent usage facts and aggregates them', async () => {
     const recorded = new ScriptedDatabase().next()
     await storeWith(recorded).recordUsageEvent({

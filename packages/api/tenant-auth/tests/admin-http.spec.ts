@@ -10,6 +10,7 @@ import {
 import type {
   AuditEventInput,
   AuditEventRecord,
+  BillingEventRecord,
   SalesEventRecord,
   SupportRequestInput,
   SupportRequestPatch,
@@ -147,6 +148,7 @@ class FakeStore implements TenantAuthStore {
   accountInputs: Parameters<TenantAuthStore['createUserInTenant']>[0][] = []
   audits: AuditEventInput[] = []
   usageRows: UsageSummaryRow[] = []
+  billingEventsRows: BillingEventRecord[] = []
   missingTenant = false
   missingAccount = false
   missingSupport = false
@@ -308,6 +310,10 @@ class FakeStore implements TenantAuthStore {
 
   async usageSummary(): Promise<readonly UsageSummaryRow[]> {
     return this.usageRows
+  }
+
+  async listBillingEvents(): Promise<readonly BillingEventRecord[]> {
+    return this.billingEventsRows
   }
 }
 
@@ -703,6 +709,20 @@ describe('overview and customers', () => {
         stripeSubscriptionId: null,
       },
     }])
+  })
+
+  it('lists billing-inbox events for the dead-letter view', async () => {
+    const store = signedIn(new FakeStore())
+    store.billingEventsRows = [{
+      eventId: 'evt-1', eventType: 'invoice.paid', status: 'failed', attempts: 2,
+      lastError: 'database unavailable', eventCreated: new Date('2026-01-01T00:00:00.000Z'),
+      receivedAt: new Date('2026-01-02T00:00:00.000Z'), processedAt: null, targetTenantId: 'tenant-a',
+    }]
+    const response = await adminApiResponse(store, request('/admin/api/billing/events'))
+    expect(response.status).toBe(200)
+    const body = await response.json() as { events: Array<Record<string, unknown>> }
+    expect(body.events).toHaveLength(1)
+    expect(body.events[0]).toMatchObject({ eventId: 'evt-1', status: 'failed', attempts: 2 })
   })
 
   it('summarizes stored usage with totals', async () => {
